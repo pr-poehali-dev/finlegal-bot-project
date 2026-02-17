@@ -9,12 +9,17 @@ interface Message {
   text: string;
   time: string;
   files?: { name: string; size: string }[];
+  paymentAmount?: number;
+  paymentDescription?: string;
 }
 
 const now = () =>
   new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
 
 const AI_CHAT_URL = func2url["ai-chat"];
+const PAYMENT_URL = func2url["create-payment"];
+
+const PRICE_REGEX = /(\d[\d\s]*)\s*₽/;
 
 const Chat = () => {
   const [searchParams] = useSearchParams();
@@ -32,6 +37,7 @@ const Chat = () => {
   ]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
+  const [isPaying, setIsPaying] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -95,16 +101,28 @@ const Chat = () => {
         throw new Error(data.error || "Ошибка сервера");
       }
 
+      const reply = data.reply;
+      const priceMatch = reply.match(PRICE_REGEX);
+      let paymentAmount: number | undefined;
+      let paymentDescription: string | undefined;
+
+      if (priceMatch) {
+        paymentAmount = parseInt(priceMatch[1].replace(/\s/g, ""), 10);
+        paymentDescription = selectedService || "Юридическая услуга";
+      }
+
       setMessages((prev) => [
         ...prev,
         {
           id: (Date.now() + 1).toString(),
           role: "bot",
-          text: data.reply,
+          text: reply,
           time: now(),
+          paymentAmount,
+          paymentDescription,
         },
       ]);
-    } catch (err) {
+    } catch {
       setMessages((prev) => [
         ...prev,
         {
@@ -116,6 +134,52 @@ const Chat = () => {
       ]);
     } finally {
       setIsTyping(false);
+    }
+  };
+
+  const handlePayment = async (amount: number, description: string) => {
+    setIsPaying(true);
+    try {
+      const resp = await fetch(PAYMENT_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          amount,
+          description,
+          return_url: window.location.href,
+        }),
+      });
+
+      const data = await resp.json();
+
+      if (!resp.ok) {
+        throw new Error(data.error || "Ошибка создания платежа");
+      }
+
+      if (data.confirmation_url) {
+        window.open(data.confirmation_url, "_blank");
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: Date.now().toString(),
+            role: "bot",
+            text: `Платёж создан. Откроется окно оплаты через ЮKassa.\n\nНомер платежа: ${data.payment_id}\nСумма: ${amount} ₽\n\nПосле оплаты вернитесь в чат — я приступлю к работе.`,
+            time: now(),
+          },
+        ]);
+      }
+    } catch {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now().toString(),
+          role: "bot",
+          text: "Не удалось создать платёж. Проверьте настройки оплаты или попробуйте позже.",
+          time: now(),
+        },
+      ]);
+    } finally {
+      setIsPaying(false);
     }
   };
 
@@ -196,6 +260,17 @@ const Chat = () => {
               )}
               <p className="text-sm whitespace-pre-wrap">{msg.text}</p>
               <span className="text-[10px] opacity-50 mt-1 block">{msg.time}</span>
+
+              {msg.paymentAmount && msg.paymentDescription && (
+                <button
+                  onClick={() => handlePayment(msg.paymentAmount!, msg.paymentDescription!)}
+                  disabled={isPaying}
+                  className="mt-3 w-full flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 text-white font-medium text-sm px-4 py-2.5 rounded-lg transition-colors disabled:opacity-50"
+                >
+                  <Icon name="CreditCard" size={16} />
+                  {isPaying ? "Создаю платёж..." : `Оплатить ${msg.paymentAmount.toLocaleString("ru-RU")} ₽`}
+                </button>
+              )}
             </div>
           </div>
         ))}

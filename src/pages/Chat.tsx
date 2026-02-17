@@ -156,14 +156,14 @@ const Chat = () => {
         throw new Error(data.error || "Ошибка создания платежа");
       }
 
-      if (data.confirmation_url) {
-        window.open(data.confirmation_url, "_blank");
+      if (data.payment_url) {
+        window.open(data.payment_url, "_blank");
         setMessages((prev) => [
           ...prev,
           {
             id: Date.now().toString(),
             role: "bot",
-            text: `Платёж создан. Откроется окно оплаты через ЮKassa.\n\nНомер платежа: ${data.payment_id}\nСумма: ${amount} ₽\n\nПосле оплаты вернитесь в чат — я приступлю к работе.`,
+            text: `Открыта страница оплаты.\n\nСумма: ${amount.toLocaleString("ru-RU")} ₽\nДоступны: банковская карта, СБП\n\nПосле оплаты вернитесь в чат — я приступлю к работе.`,
             time: now(),
           },
         ]);

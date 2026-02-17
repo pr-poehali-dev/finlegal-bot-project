@@ -1,0 +1,25 @@
+{
+  "tests": [
+    {
+      "name": "OPTIONS preflight",
+      "method": "OPTIONS",
+      "path": "/",
+      "expectedStatus": 200
+    },
+    {
+      "name": "POST without messages",
+      "method": "POST",
+      "path": "/",
+      "body": {"messages": []},
+      "expectedStatus": 400,
+      "expectedBody": {"error": "string"},
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "GET not allowed",
+      "method": "GET",
+      "path": "/",
+      "expectedStatus": 405
+    }
+  ]
+}

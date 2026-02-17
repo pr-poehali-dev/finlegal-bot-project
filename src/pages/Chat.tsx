@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useSearchParams } from "react-router-dom";
 import Icon from "@/components/ui/icon";
+import func2url from "../../backend/func2url.json";
 
 interface Message {
   id: string;
@@ -13,6 +14,8 @@ interface Message {
 const now = () =>
   new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
 
+const AI_CHAT_URL = func2url["ai-chat"];
+
 const Chat = () => {
   const [searchParams] = useSearchParams();
   const selectedService = searchParams.get("service");
@@ -22,7 +25,7 @@ const Chat = () => {
       id: "1",
       role: "bot",
       text: selectedService
-        ? `Вы выбрали услугу: "${selectedService}". Пожалуйста, загрузите документы для анализа, и я определю объём, сложность и точную стоимость работы.`
+        ? `Вы выбрали услугу: "${selectedService}". Пожалуйста, загрузите документы для анализа или опишите вашу задачу.`
         : "Здравствуйте! Я ваш финансово-юридический помощник. Выберите услугу из каталога или опишите вашу задачу, и я помогу подобрать оптимальное решение.",
       time: now(),
     },
@@ -37,18 +40,26 @@ const Chat = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const handleSend = () => {
+  const handleSend = async () => {
     if (!input.trim() && attachedFiles.length === 0) return;
+
+    const userText = input.trim();
+    const filesInfo = attachedFiles.map((f) => ({
+      name: f.name,
+      size: (f.size / 1024).toFixed(0) + " КБ",
+    }));
+
+    const filesMention =
+      attachedFiles.length > 0
+        ? `\n[Прикреплены файлы: ${attachedFiles.map((f) => f.name).join(", ")}]`
+        : "";
 
     const userMsg: Message = {
       id: Date.now().toString(),
       role: "user",
-      text: input,
+      text: userText,
       time: now(),
-      files: attachedFiles.map((f) => ({
-        name: f.name,
-        size: (f.size / 1024).toFixed(0) + " КБ",
-      })),
+      files: filesInfo.length > 0 ? filesInfo : undefined,
     };
 
     setMessages((prev) => [...prev, userMsg]);
@@ -56,25 +67,56 @@ const Chat = () => {
     setAttachedFiles([]);
     setIsTyping(true);
 
-    setTimeout(() => {
-      const hasFiles = userMsg.files && userMsg.files.length > 0;
+    const chatHistory = messages
+      .filter((m) => m.id !== "1")
+      .map((m) => ({
+        role: m.role === "bot" ? "assistant" : "user",
+        content: m.text,
+      }));
 
-      let botText = "";
-      if (hasFiles && selectedService) {
-        botText = `Документы получены (${userMsg.files!.length} шт.). Провожу анализ...\n\n📊 **Результат анализа:**\n• Объём: ${userMsg.files!.length} документ(ов)\n• Сложность: средняя\n• Ориентировочное время: 2-4 часа\n\n💰 **Стоимость: 5 000 ₽**\n\nДля оплаты через ЮKassa нажмите кнопку ниже. После подтверждения оплаты я сразу приступлю к работе.`;
-      } else if (hasFiles) {
-        botText = `Получил ваши файлы (${userMsg.files!.length} шт.). Чтобы я мог провести анализ, выберите тип услуги:\n\n1. Анализ договоров\n2. Консультация по законодательству\n3. Подготовка документов\n\nИли опишите задачу своими словами.`;
-      } else {
-        botText =
-          "Понял вашу задачу. Для точного расчёта стоимости мне потребуется проанализировать ваши документы. Пожалуйста, загрузите файлы через кнопку 📎 или выберите конкретную услугу в каталоге.";
+    chatHistory.push({
+      role: "user",
+      content: (userText || "Анализируй прикреплённые файлы") + filesMention,
+    });
+
+    try {
+      const resp = await fetch(AI_CHAT_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: chatHistory,
+          service: selectedService || "",
+        }),
+      });
+
+      const data = await resp.json();
+
+      if (!resp.ok) {
+        throw new Error(data.error || "Ошибка сервера");
       }
 
       setMessages((prev) => [
         ...prev,
-        { id: (Date.now() + 1).toString(), role: "bot", text: botText, time: now() },
+        {
+          id: (Date.now() + 1).toString(),
+          role: "bot",
+          text: data.reply,
+          time: now(),
+        },
       ]);
+    } catch (err) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: (Date.now() + 1).toString(),
+          role: "bot",
+          text: "Извините, произошла ошибка при обращении к AI. Попробуйте ещё раз.",
+          time: now(),
+        },
+      ]);
+    } finally {
       setIsTyping(false);
-    }, 1500);
+    }
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -217,7 +259,8 @@ const Chat = () => {
         />
         <button
           onClick={handleSend}
-          className="p-3 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
+          disabled={isTyping}
+          className="p-3 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
         >
           <Icon name="Send" size={18} />
         </button>

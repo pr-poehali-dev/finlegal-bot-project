@@ -52,36 +52,42 @@ export function setSession(user: UserProfile | null, token?: string) {
   }
 }
 
+async function apiCall(body: Record<string, unknown>, extraHeaders?: Record<string, string>) {
+  if (!API_URL) throw new Error('Сервер недоступен. Попробуйте позже.');
+  try {
+    const resp = await fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...extraHeaders },
+      body: JSON.stringify(body),
+    });
+    if (resp.status === 402) throw new Error('Сервис временно недоступен. Попробуйте позже.');
+    const text = await resp.text();
+    let data;
+    try { data = JSON.parse(text); } catch { data = { error: text || 'Неизвестная ошибка сервера' }; }
+    if (!resp.ok) throw new Error(data.error || `Ошибка сервера (${resp.status})`);
+    return data;
+  } catch (err: unknown) {
+    if (err instanceof TypeError && (err.message === 'Failed to fetch' || err.message.includes('NetworkError'))) {
+      throw new Error('Нет связи с сервером. Проверьте интернет и попробуйте ещё раз.');
+    }
+    throw err;
+  }
+}
+
 export async function register(phone: string, name: string, password: string): Promise<{ user: UserProfile; token: string }> {
-  const resp = await fetch(API_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action: 'register', phone, name, password }),
-  });
-  const data = await resp.json();
-  if (!resp.ok) throw new Error(data.error || 'Ошибка регистрации');
-  return data;
+  return apiCall({ action: 'register', phone, name, password });
 }
 
 export async function login(phone: string, password: string): Promise<{ user: UserProfile; token: string }> {
-  const resp = await fetch(API_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action: 'login', phone, password }),
-  });
-  const data = await resp.json();
-  if (!resp.ok) throw new Error(data.error || 'Ошибка входа');
-  return data;
+  return apiCall({ action: 'login', phone, password });
 }
 
 export async function fetchMe(): Promise<UserProfile | null> {
   const token = getToken();
   if (!token) return null;
-  const resp = await fetch(API_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Session-Id': token },
-    body: JSON.stringify({ action: 'me' }),
-  });
-  if (!resp.ok) return null;
-  return resp.json();
+  try {
+    return await apiCall({ action: 'me' }, { 'X-Session-Id': token });
+  } catch {
+    return null;
+  }
 }

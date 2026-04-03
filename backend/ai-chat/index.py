@@ -1,38 +1,143 @@
 import json
 import os
+import hashlib
+import secrets
 import urllib.request
 import urllib.error
+import boto3
+from botocore.exceptions import ClientError
 
 
-def handler(event: dict, context) -> dict:
-    """Чат-бот с Qwen AI для финансово-юридических консультаций"""
-    if event.get('httpMethod') == 'OPTIONS':
-        return {
-            'statusCode': 200,
-            'headers': {
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Methods': 'POST, OPTIONS',
-                'Access-Control-Allow-Headers': 'Content-Type',
-                'Access-Control-Max-Age': '86400',
-            },
-            'body': '',
-        }
+CORS = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, X-Session-Id',
+    'Access-Control-Max-Age': '86400',
+    'Content-Type': 'application/json',
+}
 
-    cors = {'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json'}
 
-    if event.get('httpMethod') != 'POST':
-        return {'statusCode': 405, 'headers': cors, 'body': json.dumps({'error': 'Method not allowed'})}
+def get_s3():
+    return boto3.client(
+        's3',
+        endpoint_url='https://bucket.poehali.dev',
+        aws_access_key_id=os.environ['AWS_ACCESS_KEY_ID'],
+        aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY'],
+    )
 
+
+def load_json_s3(s3, key):
     try:
-        raw_body = event.get('body') or '{}'
-        body = json.loads(raw_body) if isinstance(raw_body, str) else raw_body
-    except (json.JSONDecodeError, TypeError):
-        body = {}
+        resp = s3.get_object(Bucket='files', Key=key)
+        return json.loads(resp['Body'].read().decode('utf-8'))
+    except ClientError as e:
+        if e.response['Error']['Code'] in ('NoSuchKey', '404'):
+            return {}
+        raise
+
+
+def save_json_s3(s3, key, data):
+    s3.put_object(Bucket='files', Key=key, Body=json.dumps(data).encode('utf-8'), ContentType='application/json')
+
+
+def hash_password(password: str) -> str:
+    return hashlib.sha256(f'jurbot_v1:{password}'.encode('utf-8')).hexdigest()
+
+
+def normalize_phone(phone: str) -> str:
+    digits = ''.join(c for c in phone if c.isdigit())
+    if digits.startswith('8') and len(digits) == 11:
+        digits = '7' + digits[1:]
+    if not digits.startswith('7'):
+        digits = '7' + digits
+    return digits[:11]
+
+
+def ok(body):
+    return {'statusCode': 200, 'headers': CORS, 'body': json.dumps(body)}
+
+
+def err(status, msg):
+    return {'statusCode': status, 'headers': CORS, 'body': json.dumps({'error': msg})}
+
+
+def handle_register(body, s3):
+    phone = normalize_phone(body.get('phone') or '')
+    name = (body.get('name') or '').strip()
+    password = body.get('password') or ''
+
+    if len(phone) != 11:
+        return err(400, 'Введите корректный номер телефона')
+    if not name:
+        return err(400, 'Введите ваше имя')
+    if len(password) < 6:
+        return err(400, 'Пароль — минимум 6 символов')
+
+    users = load_json_s3(s3, 'auth/users.json')
+    if phone in users:
+        return err(409, 'Этот номер уже зарегистрирован')
+
+    users[phone] = {
+        'id': secrets.token_hex(8),
+        'phone': phone,
+        'name': name,
+        'password_hash': hash_password(password),
+    }
+    save_json_s3(s3, 'auth/users.json', users)
+
+    token = secrets.token_hex(32)
+    sessions = load_json_s3(s3, 'auth/sessions.json')
+    sessions[token] = phone
+    save_json_s3(s3, 'auth/sessions.json', sessions)
+
+    return ok({'token': token, 'user': {'id': users[phone]['id'], 'phone': phone, 'name': name}})
+
+
+def handle_login(body, s3):
+    phone = normalize_phone(body.get('phone') or '')
+    password = body.get('password') or ''
+
+    if len(phone) != 11 or not password:
+        return err(400, 'Введите номер телефона и пароль')
+
+    users = load_json_s3(s3, 'auth/users.json')
+    user = users.get(phone)
+    if not user or user['password_hash'] != hash_password(password):
+        return err(401, 'Неверный номер или пароль')
+
+    token = secrets.token_hex(32)
+    sessions = load_json_s3(s3, 'auth/sessions.json')
+    sessions[token] = phone
+    save_json_s3(s3, 'auth/sessions.json', sessions)
+
+    return ok({'token': token, 'user': {'id': user['id'], 'phone': user['phone'], 'name': user['name']}})
+
+
+def handle_me(event, s3):
+    headers = event.get('headers', {})
+    session_id = headers.get('X-Session-Id') or headers.get('x-session-id', '')
+    if not session_id:
+        return err(401, 'Не авторизован')
+
+    sessions = load_json_s3(s3, 'auth/sessions.json')
+    phone = sessions.get(session_id)
+    if not phone:
+        return err(401, 'Сессия истекла')
+
+    users = load_json_s3(s3, 'auth/users.json')
+    user = users.get(phone)
+    if not user:
+        return err(401, 'Пользователь не найден')
+
+    return ok({'id': user['id'], 'phone': user['phone'], 'name': user['name']})
+
+
+def handle_chat(body):
     messages = body.get('messages', [])
     service = body.get('service', '')
 
     if not messages:
-        return {'statusCode': 400, 'headers': cors, 'body': json.dumps({'error': 'No messages'})}
+        return err(400, 'No messages')
 
     system_prompt = (
         "Ты — профессиональный финансово-юридический помощник ЮрБот. "
@@ -51,7 +156,7 @@ def handler(event: dict, context) -> dict:
 
     api_key = os.environ.get('QWEN_API_KEY', '')
     if not api_key:
-        return {'statusCode': 500, 'headers': cors, 'body': json.dumps({'error': 'API key not configured'})}
+        return err(500, 'API key not configured')
 
     payload = json.dumps({
         "model": "qwen/qwen3-235b-a22b",
@@ -63,10 +168,7 @@ def handler(event: dict, context) -> dict:
     req = urllib.request.Request(
         "https://openrouter.ai/api/v1/chat/completions",
         data=payload,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
     )
 
     try:
@@ -74,19 +176,49 @@ def handler(event: dict, context) -> dict:
             data = json.loads(resp.read().decode('utf-8'))
     except urllib.error.HTTPError as e:
         error_body = e.read().decode('utf-8') if e.fp else ''
-        return {'statusCode': 502, 'headers': cors, 'body': json.dumps({'error': f'AI error: {e.code}', 'detail': error_body})}
+        return err(502, f'AI error: {e.code}')
     except Exception as e:
-        return {'statusCode': 502, 'headers': cors, 'body': json.dumps({'error': str(e)})}
+        return err(502, str(e))
 
     reply = data.get('choices', [{}])[0].get('message', {}).get('content', 'Не удалось получить ответ.')
-
     if reply.startswith('<think>'):
         think_end = reply.find('</think>')
         if think_end != -1:
             reply = reply[think_end + len('</think>'):].strip()
 
-    return {
-        'statusCode': 200,
-        'headers': cors,
-        'body': json.dumps({'reply': reply}),
-    }
+    return ok({'reply': reply})
+
+
+def handler(event: dict, context) -> dict:
+    """API: чат с ИИ + регистрация/вход по телефону и паролю"""
+
+    if event.get('httpMethod') == 'OPTIONS':
+        return {'statusCode': 200, 'headers': CORS, 'body': ''}
+
+    method = event.get('httpMethod', 'GET')
+
+    if method != 'POST':
+        return err(405, 'Method not allowed')
+
+    body = {}
+    if event.get('body'):
+        try:
+            body = json.loads(event['body'])
+        except (json.JSONDecodeError, TypeError):
+            body = {}
+
+    action = body.get('action', 'chat')
+
+    if action == 'register':
+        s3 = get_s3()
+        return handle_register(body, s3)
+
+    if action == 'login':
+        s3 = get_s3()
+        return handle_login(body, s3)
+
+    if action == 'me':
+        s3 = get_s3()
+        return handle_me(event, s3)
+
+    return handle_chat(body)

@@ -1,12 +1,14 @@
+import func2url from "../../backend/func2url.json";
+
 export interface UserProfile {
   id: string;
   name: string;
-  email: string;
-  avatar_url: string;
-  provider: 'google';
+  phone: string;
 }
 
 const SESSION_KEY = 'jurbot_user';
+const TOKEN_KEY = 'jurbot_token';
+const API_URL = (func2url as Record<string, string>)['ai-chat'] || '';
 
 export function getStoredUser(): UserProfile | null {
   try {
@@ -17,45 +19,50 @@ export function getStoredUser(): UserProfile | null {
   }
 }
 
-export function setStoredUser(user: UserProfile | null) {
-  if (user) {
+export function getToken(): string {
+  return localStorage.getItem(TOKEN_KEY) || '';
+}
+
+export function setSession(user: UserProfile | null, token?: string) {
+  if (user && token) {
     localStorage.setItem(SESSION_KEY, JSON.stringify(user));
+    localStorage.setItem(TOKEN_KEY, token);
   } else {
     localStorage.removeItem(SESSION_KEY);
+    localStorage.removeItem(TOKEN_KEY);
   }
 }
 
-function generateCodeVerifier(): string {
-  const array = new Uint8Array(32);
-  crypto.getRandomValues(array);
-  return btoa(String.fromCharCode(...array))
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-}
-
-async function generateCodeChallenge(verifier: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(verifier);
-  const digest = await crypto.subtle.digest('SHA-256', data);
-  return btoa(String.fromCharCode(...new Uint8Array(digest)))
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-}
-
-export async function startGoogleOAuth(clientId: string) {
-  const verifier = generateCodeVerifier();
-  const challenge = await generateCodeChallenge(verifier);
-  sessionStorage.setItem('oauth_verifier', verifier);
-  sessionStorage.setItem('oauth_provider', 'google');
-
-  const redirectUri = window.location.origin + '/profile';
-  const params = new URLSearchParams({
-    client_id: clientId,
-    redirect_uri: redirectUri,
-    response_type: 'code',
-    scope: 'openid email profile',
-    code_challenge: challenge,
-    code_challenge_method: 'S256',
-    access_type: 'offline',
+export async function register(phone: string, name: string, password: string): Promise<{ user: UserProfile; token: string }> {
+  const resp = await fetch(API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'register', phone, name, password }),
   });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.error || 'Ошибка регистрации');
+  return data;
+}
 
-  window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
+export async function login(phone: string, password: string): Promise<{ user: UserProfile; token: string }> {
+  const resp = await fetch(API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'login', phone, password }),
+  });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.error || 'Ошибка входа');
+  return data;
+}
+
+export async function fetchMe(): Promise<UserProfile | null> {
+  const token = getToken();
+  if (!token) return null;
+  const resp = await fetch(API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Session-Id': token },
+    body: JSON.stringify({ action: 'me' }),
+  });
+  if (!resp.ok) return null;
+  return resp.json();
 }

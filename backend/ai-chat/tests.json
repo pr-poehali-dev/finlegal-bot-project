@@ -7,10 +7,37 @@
       "expectedStatus": 200
     },
     {
-      "name": "POST without messages",
+      "name": "Register missing fields",
       "method": "POST",
       "path": "/",
-      "body": {"messages": []},
+      "body": {"action": "register"},
+      "expectedStatus": 400,
+      "expectedBody": {"error": "string"},
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Login missing fields",
+      "method": "POST",
+      "path": "/",
+      "body": {"action": "login"},
+      "expectedStatus": 400,
+      "expectedBody": {"error": "string"},
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Me without session",
+      "method": "POST",
+      "path": "/",
+      "body": {"action": "me"},
+      "expectedStatus": 401,
+      "expectedBody": {"error": "string"},
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Chat without messages",
+      "method": "POST",
+      "path": "/",
+      "body": {},
       "expectedStatus": 400,
       "expectedBody": {"error": "string"},
       "bodyMatcher": "partial"

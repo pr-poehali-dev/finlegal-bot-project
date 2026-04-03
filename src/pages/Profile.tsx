@@ -5,6 +5,9 @@ import {
   setSession,
   register,
   login,
+  getSavedCredentials,
+  saveCredentials,
+  clearCredentials,
   UserProfile,
 } from "@/lib/auth";
 
@@ -14,13 +17,23 @@ const Profile = () => {
   const [phone, setPhone] = useState("");
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [rememberMe, setRememberMe] = useState(true);
   const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [showPrivacy, setShowPrivacy] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [hasSavedCreds, setHasSavedCreds] = useState(false);
 
   useEffect(() => {
     setUser(getStoredUser());
+    const saved = getSavedCredentials();
+    if (saved) {
+      setPhone(formatPhone(saved.phone));
+      setPassword(saved.password);
+      setHasSavedCreds(true);
+    }
   }, []);
 
   const formatPhone = (value: string) => {
@@ -40,8 +53,29 @@ const Profile = () => {
     }
   };
 
+  const validateForm = (): string | null => {
+    const rawPhone = phone.replace(/\D/g, "");
+    if (rawPhone.length !== 11) return "Введите полный номер телефона";
+    if (!password) return "Введите пароль";
+
+    if (mode === "register") {
+      if (!name.trim()) return "Введите ваше имя";
+      if (name.trim().length < 2) return "Имя слишком короткое";
+      if (password.length < 6) return "Пароль — минимум 6 символов";
+      if (password !== confirmPassword) return "Пароли не совпадают";
+      if (!agreedToTerms) return "Примите условия для продолжения";
+    }
+    return null;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const validationError = validateForm();
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+
     setError("");
     setLoading(true);
 
@@ -50,10 +84,17 @@ const Profile = () => {
     try {
       let result;
       if (mode === "register") {
-        result = await register(rawPhone, name, password);
+        result = await register(rawPhone, name.trim(), password);
       } else {
         result = await login(rawPhone, password);
       }
+
+      if (rememberMe) {
+        saveCredentials(rawPhone, password);
+      } else {
+        clearCredentials();
+      }
+
       setSession(result.user, result.token);
       setUser(result.user);
     } catch (err: unknown) {
@@ -63,12 +104,38 @@ const Profile = () => {
     }
   };
 
+  const handleQuickLogin = async () => {
+    const saved = getSavedCredentials();
+    if (!saved) return;
+    setError("");
+    setLoading(true);
+    try {
+      const result = await login(saved.phone, saved.password);
+      setSession(result.user, result.token);
+      setUser(result.user);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Произошла ошибка");
+      clearCredentials();
+      setHasSavedCreds(false);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleLogout = () => {
     setSession(null);
     setUser(null);
-    setPhone("");
     setName("");
-    setPassword("");
+    setConfirmPassword("");
+    const saved = getSavedCredentials();
+    if (saved) {
+      setPhone(formatPhone(saved.phone));
+      setPassword(saved.password);
+      setHasSavedCreds(true);
+    } else {
+      setPhone("");
+      setPassword("");
+    }
   };
 
   if (user) {
@@ -134,6 +201,20 @@ const Profile = () => {
           </div>
         )}
 
+        {mode === "login" && hasSavedCreds && (
+          <button
+            onClick={handleQuickLogin}
+            disabled={loading}
+            className="w-full mb-4 flex items-center gap-3 px-4 py-3 rounded-lg bg-primary/10 border border-primary/20 text-foreground text-sm hover:bg-primary/20 transition-colors disabled:opacity-40"
+          >
+            <Icon name="Zap" size={18} className="text-primary" />
+            <span>Быстрый вход</span>
+            <span className="ml-auto text-xs text-muted-foreground">
+              {formatPhone(getSavedCredentials()?.phone || "")}
+            </span>
+          </button>
+        )}
+
         <form onSubmit={handleSubmit} className="space-y-4">
           {mode === "register" && (
             <div>
@@ -161,42 +242,88 @@ const Profile = () => {
 
           <div>
             <label className="block text-sm text-muted-foreground mb-1.5">Пароль</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder={mode === "register" ? "Минимум 6 символов" : "Ваш пароль"}
-              className="w-full px-4 py-3 rounded-lg border border-border bg-secondary text-foreground text-sm placeholder:text-muted-foreground focus:outline-none focus:border-primary transition-colors"
-            />
+            <div className="relative">
+              <input
+                type={showPassword ? "text" : "password"}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder={mode === "register" ? "Минимум 6 символов" : "Ваш пароль"}
+                className="w-full px-4 py-3 pr-12 rounded-lg border border-border bg-secondary text-foreground text-sm placeholder:text-muted-foreground focus:outline-none focus:border-primary transition-colors"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <Icon name={showPassword ? "EyeOff" : "Eye"} size={18} />
+              </button>
+            </div>
           </div>
 
           {mode === "register" && (
-            <label className="flex items-start gap-2 text-left cursor-pointer">
+            <div>
+              <label className="block text-sm text-muted-foreground mb-1.5">Повторите пароль</label>
+              <input
+                type={showPassword ? "text" : "password"}
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="Повторите пароль"
+                className="w-full px-4 py-3 rounded-lg border border-border bg-secondary text-foreground text-sm placeholder:text-muted-foreground focus:outline-none focus:border-primary transition-colors"
+              />
+            </div>
+          )}
+
+          {mode === "login" && (
+            <label className="flex items-center gap-2 cursor-pointer">
               <input
                 type="checkbox"
-                checked={agreedToTerms}
-                onChange={(e) => setAgreedToTerms(e.target.checked)}
-                className="mt-1 accent-primary"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
+                className="accent-primary"
               />
-              <span className="text-xs text-muted-foreground">
-                Я даю{" "}
-                <button
-                  type="button"
-                  onClick={() => setShowPrivacy(true)}
-                  className="text-primary underline"
-                >
-                  согласие на обработку персональных данных
-                </button>{" "}
-                и принимаю{" "}
-                <button
-                  type="button"
-                  onClick={() => setShowPrivacy(true)}
-                  className="text-primary underline"
-                >
-                  политику конфиденциальности
-                </button>
-              </span>
+              <span className="text-xs text-muted-foreground">Запомнить меня</span>
             </label>
+          )}
+
+          {mode === "register" && (
+            <>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={rememberMe}
+                  onChange={(e) => setRememberMe(e.target.checked)}
+                  className="accent-primary"
+                />
+                <span className="text-xs text-muted-foreground">Запомнить данные для входа</span>
+              </label>
+
+              <label className="flex items-start gap-2 text-left cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={agreedToTerms}
+                  onChange={(e) => setAgreedToTerms(e.target.checked)}
+                  className="mt-1 accent-primary"
+                />
+                <span className="text-xs text-muted-foreground">
+                  Я даю{" "}
+                  <button
+                    type="button"
+                    onClick={() => setShowPrivacy(true)}
+                    className="text-primary underline"
+                  >
+                    согласие на обработку персональных данных
+                  </button>{" "}
+                  и принимаю{" "}
+                  <button
+                    type="button"
+                    onClick={() => setShowPrivacy(true)}
+                    className="text-primary underline"
+                  >
+                    политику конфиденциальности
+                  </button>
+                </span>
+              </label>
+            </>
           )}
 
           <button
@@ -222,6 +349,7 @@ const Profile = () => {
             onClick={() => {
               setMode(mode === "login" ? "register" : "login");
               setError("");
+              setConfirmPassword("");
             }}
             className="text-sm text-primary hover:underline"
           >

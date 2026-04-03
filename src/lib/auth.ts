@@ -8,7 +8,26 @@ export interface UserProfile {
 
 const SESSION_KEY = 'jurbot_user';
 const TOKEN_KEY = 'jurbot_token';
+const SAVED_PHONE_KEY = 'jurbot_saved_phone';
+const SAVED_PASS_KEY = 'jurbot_saved_pass';
 const API_URL = (func2url as Record<string, string>)['ai-chat'] || '';
+
+export function getSavedCredentials(): { phone: string; password: string } | null {
+  const phone = localStorage.getItem(SAVED_PHONE_KEY);
+  const password = localStorage.getItem(SAVED_PASS_KEY);
+  if (phone && password) return { phone, password };
+  return null;
+}
+
+export function saveCredentials(phone: string, password: string) {
+  localStorage.setItem(SAVED_PHONE_KEY, phone);
+  localStorage.setItem(SAVED_PASS_KEY, password);
+}
+
+export function clearCredentials() {
+  localStorage.removeItem(SAVED_PHONE_KEY);
+  localStorage.removeItem(SAVED_PASS_KEY);
+}
 
 export function getStoredUser(): UserProfile | null {
   try {

@@ -43,7 +43,6 @@ def handler(event: dict, context) -> dict:
         'receiver': wallet,
         'quickpay-form': 'shop',
         'targets': description[:128],
-        'paymentType': 'AC',
         'sum': f"{float(amount):.2f}",
         'successURL': body.get('return_url', ''),
     }

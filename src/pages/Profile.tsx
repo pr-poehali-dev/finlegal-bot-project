@@ -5,13 +5,10 @@ import {
   getStoredUser,
   setStoredUser,
   startGoogleOAuth,
-  startYandexOAuth,
-  handleYandexCallback,
   UserProfile,
 } from "@/lib/auth";
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || "";
-const YANDEX_CLIENT_ID = import.meta.env.VITE_YANDEX_CLIENT_ID || "";
 
 const Profile = () => {
   const [searchParams] = useSearchParams();
@@ -22,40 +19,12 @@ const Profile = () => {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    const init = async () => {
-      const hash = window.location.hash;
-      const provider = sessionStorage.getItem("oauth_provider");
-
-      if (hash && hash.includes("access_token") && provider === "yandex") {
-        const hashParams = new URLSearchParams(hash.slice(1));
-        const token = hashParams.get("access_token");
-        if (token) {
-          const profile = await handleYandexCallback(token);
-          if (profile) {
-            setStoredUser(profile);
-            setUser(profile);
-            sessionStorage.removeItem("oauth_provider");
-            window.history.replaceState({}, "", "/profile");
-            setLoading(false);
-            return;
-          }
-        }
-        setError("Не удалось получить данные профиля Яндекс");
-        sessionStorage.removeItem("oauth_provider");
-        window.history.replaceState({}, "", "/profile");
-        setLoading(false);
-        return;
-      }
-
-      if (searchParams.get("error")) {
-        setError("Ошибка авторизации. Попробуйте ещё раз.");
-      }
-
-      const stored = getStoredUser();
-      setUser(stored);
-      setLoading(false);
-    };
-    init();
+    if (searchParams.get("error")) {
+      setError("Ошибка авторизации. Попробуйте ещё раз.");
+    }
+    const stored = getStoredUser();
+    setUser(stored);
+    setLoading(false);
   }, []);
 
   const handleLogout = () => {
@@ -64,19 +33,7 @@ const Profile = () => {
   };
 
   const handleGoogle = async () => {
-    if (!GOOGLE_CLIENT_ID) {
-      setError("Google OAuth не настроен. Добавьте VITE_GOOGLE_CLIENT_ID.");
-      return;
-    }
     await startGoogleOAuth(GOOGLE_CLIENT_ID);
-  };
-
-  const handleYandex = async () => {
-    if (!YANDEX_CLIENT_ID) {
-      setError("Яндекс OAuth не настроен. Добавьте VITE_YANDEX_CLIENT_ID.");
-      return;
-    }
-    await startYandexOAuth(YANDEX_CLIENT_ID);
   };
 
   if (loading) {
@@ -105,7 +62,7 @@ const Profile = () => {
             </div>
           )}
 
-          <div className="space-y-3 mb-6">
+          <div className="mb-6">
             <button
               onClick={handleGoogle}
               disabled={!agreedToTerms}
@@ -122,22 +79,6 @@ const Profile = () => {
                 <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
               </svg>
               Войти через Google
-            </button>
-
-            <button
-              onClick={handleYandex}
-              disabled={!agreedToTerms}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg border border-border bg-secondary text-secondary-foreground text-sm transition-colors ${
-                agreedToTerms
-                  ? "hover:border-red-500/40 hover:bg-secondary/80 cursor-pointer"
-                  : "opacity-40 cursor-not-allowed"
-              }`}
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" className="shrink-0">
-                <path fill="#FC3F1D" d="M2 0h20a2 2 0 0 1 2 2v20a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V2a2 2 0 0 1 2-2z"/>
-                <path fill="#fff" d="M13.32 6.4H12.1c-1.82 0-2.79.9-2.79 2.37 0 1.28.58 1.97 1.78 2.75l.98.65-2.83 4.43H7.5l2.63-4.1c-1.47-.98-2.3-1.96-2.3-3.65C7.83 6.25 9.28 5 12.07 5H14.5v10.6h-1.18V6.4z"/>
-              </svg>
-              Войти через Яндекс
             </button>
           </div>
 
@@ -242,9 +183,7 @@ const Profile = () => {
           <div>
             <h1 className="text-xl font-bold text-foreground">{user.name || "Пользователь"}</h1>
             <p className="text-sm text-muted-foreground">{user.email}</p>
-            <p className="text-xs text-muted-foreground mt-0.5 capitalize">
-              Вход через {user.provider === "google" ? "Google" : "Яндекс"}
-            </p>
+            <p className="text-xs text-muted-foreground mt-0.5">Вход через Google</p>
           </div>
         </div>
 

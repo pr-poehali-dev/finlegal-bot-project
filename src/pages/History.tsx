@@ -1,29 +1,6 @@
 import { Link } from "react-router-dom";
 import Icon from "@/components/ui/icon";
-
-const historyItems = [
-  {
-    id: "1",
-    service: "Анализ договора аренды",
-    status: "completed",
-    date: "15.02.2026",
-    price: "5 000 ₽",
-  },
-  {
-    id: "2",
-    service: "Консультация по трудовому праву",
-    status: "completed",
-    date: "12.02.2026",
-    price: "3 000 ₽",
-  },
-  {
-    id: "3",
-    service: "Подготовка договора поставки",
-    status: "in_progress",
-    date: "16.02.2026",
-    price: "8 000 ₽",
-  },
-];
+import { getStoredUser } from "@/lib/auth";
 
 const statusLabels: Record<string, { text: string; color: string }> = {
   completed: { text: "Выполнено", color: "text-green-400 bg-green-400/10" },
@@ -32,6 +9,43 @@ const statusLabels: Record<string, { text: string; color: string }> = {
 };
 
 const History = () => {
+  const user = getStoredUser();
+
+  if (!user) {
+    return (
+      <div className="max-w-4xl mx-auto animate-fade-in">
+        <div>
+          <h1 className="text-2xl font-bold text-foreground mb-1">История заказов</h1>
+          <p className="text-muted-foreground text-sm mb-6">
+            Все ваши обращения и результаты работы
+          </p>
+        </div>
+        <div className="bg-card border border-border rounded-xl p-12 text-center">
+          <Icon name="LogIn" size={48} className="text-muted-foreground mx-auto mb-4" />
+          <p className="text-foreground font-medium mb-2">Войдите, чтобы увидеть историю</p>
+          <p className="text-muted-foreground text-sm mb-4">
+            История заказов доступна только авторизованным пользователям
+          </p>
+          <Link
+            to="/profile"
+            className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm hover:bg-primary/90 transition-colors"
+          >
+            <Icon name="UserCircle" size={16} />
+            Войти в аккаунт
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  const historyItems: {
+    id: string;
+    service: string;
+    status: string;
+    date: string;
+    price: string;
+  }[] = [];
+
   return (
     <div className="max-w-4xl mx-auto space-y-6 animate-fade-in">
       <div>
@@ -44,7 +58,17 @@ const History = () => {
       {historyItems.length === 0 ? (
         <div className="bg-card border border-border rounded-xl p-12 text-center">
           <Icon name="Inbox" size={48} className="text-muted-foreground mx-auto mb-4" />
-          <p className="text-muted-foreground">История пуста</p>
+          <p className="text-foreground font-medium mb-2">История пока пуста</p>
+          <p className="text-muted-foreground text-sm mb-4">
+            Ваши заказы будут отображаться здесь после первого обращения
+          </p>
+          <Link
+            to="/services"
+            className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm hover:bg-primary/90 transition-colors"
+          >
+            <Icon name="ArrowRight" size={16} />
+            Выбрать услугу
+          </Link>
         </div>
       ) : (
         <div className="space-y-3">

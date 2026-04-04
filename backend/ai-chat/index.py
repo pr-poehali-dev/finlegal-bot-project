@@ -137,6 +137,62 @@ def handle_me(event, s3):
     return ok({'id': user['id'], 'phone': user['phone'], 'name': user['name']})
 
 
+def get_user_by_session(event, s3):
+    headers = event.get('headers', {})
+    session_id = headers.get('X-Session-Id') or headers.get('x-session-id', '')
+    if not session_id:
+        return None, None, session_id
+    sessions = load_json_s3(s3, 'auth/sessions.json')
+    phone = sessions.get(session_id)
+    if not phone:
+        return None, None, session_id
+    users = load_json_s3(s3, 'auth/users.json')
+    user = users.get(phone)
+    return user, phone, session_id
+
+
+def handle_update_profile(event, body, s3):
+    user, phone, _ = get_user_by_session(event, s3)
+    if not user:
+        return err(401, 'Не авторизован')
+
+    new_name = (body.get('name') or '').strip()
+    new_password = body.get('new_password')
+
+    if new_name and len(new_name) < 2:
+        return err(400, 'Имя слишком короткое')
+
+    if new_password is not None and len(new_password) < 6:
+        return err(400, 'Пароль — минимум 6 символов')
+
+    users = load_json_s3(s3, 'auth/users.json')
+    if new_name:
+        users[phone]['name'] = new_name
+    if new_password:
+        users[phone]['password_hash'] = hash_password(new_password)
+
+    save_json_s3(s3, 'auth/users.json', users)
+    return ok({'user': {'id': users[phone]['id'], 'phone': phone, 'name': users[phone]['name']}})
+
+
+def handle_delete_account(event, s3):
+    user, phone, session_id = get_user_by_session(event, s3)
+    if not user:
+        return err(401, 'Не авторизован')
+
+    users = load_json_s3(s3, 'auth/users.json')
+    users.pop(phone, None)
+    save_json_s3(s3, 'auth/users.json', users)
+
+    sessions = load_json_s3(s3, 'auth/sessions.json')
+    to_remove = [k for k, v in sessions.items() if v == phone]
+    for k in to_remove:
+        sessions.pop(k, None)
+    save_json_s3(s3, 'auth/sessions.json', sessions)
+
+    return ok({'ok': True})
+
+
 def handle_support_ticket(body):
     message = (body.get('message') or '').strip()
     phone = (body.get('phone') or '').strip()
@@ -429,6 +485,14 @@ def handler(event: dict, context) -> dict:
     if action == 'me':
         s3 = get_s3()
         return handle_me(event, s3)
+
+    if action == 'update_profile':
+        s3 = get_s3()
+        return handle_update_profile(event, body, s3)
+
+    if action == 'delete_account':
+        s3 = get_s3()
+        return handle_delete_account(event, s3)
 
     if action == 'support_ticket':
         return handle_support_ticket(body)

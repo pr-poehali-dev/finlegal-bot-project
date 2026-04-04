@@ -8,6 +8,8 @@ import {
   getSavedCredentials,
   saveCredentials,
   clearCredentials,
+  updateProfile,
+  deleteAccount,
   UserProfile,
 } from "@/lib/auth";
 
@@ -138,6 +140,83 @@ const Profile = () => {
     }
   };
 
+  const [editName, setEditName] = useState("");
+  const [editPassword, setEditPassword] = useState("");
+  const [editConfirm, setEditConfirm] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [editError, setEditError] = useState("");
+  const [editSuccess, setEditSuccess] = useState("");
+  const [showDelete, setShowDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  const handleStartEdit = () => {
+    setEditName(user?.name || "");
+    setEditPassword("");
+    setEditConfirm("");
+    setEditError("");
+    setEditSuccess("");
+    setEditing(true);
+  };
+
+  const handleSaveProfile = async () => {
+    setEditError("");
+    setEditSuccess("");
+
+    if (editName.trim() && editName.trim().length < 2) {
+      setEditError("Имя слишком короткое");
+      return;
+    }
+    if (editPassword && editPassword.length < 6) {
+      setEditError("Пароль — минимум 6 символов");
+      return;
+    }
+    if (editPassword && editPassword !== editConfirm) {
+      setEditError("Пароли не совпадают");
+      return;
+    }
+
+    const updates: { name?: string; new_password?: string } = {};
+    if (editName.trim() && editName.trim() !== user?.name) updates.name = editName.trim();
+    if (editPassword) updates.new_password = editPassword;
+
+    if (!updates.name && !updates.new_password) {
+      setEditing(false);
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const result = await updateProfile(updates);
+      setSession(result.user, localStorage.getItem("jurbot_token") || "");
+      setUser(result.user);
+      if (updates.new_password) {
+        const saved = getSavedCredentials();
+        if (saved) saveCredentials(saved.phone, updates.new_password);
+      }
+      setEditSuccess("Сохранено");
+      setTimeout(() => { setEditing(false); setEditSuccess(""); }, 1500);
+    } catch (e: unknown) {
+      setEditError(e instanceof Error ? e.message : "Ошибка сохранения");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteAccount = async () => {
+    setDeleting(true);
+    try {
+      await deleteAccount();
+      clearCredentials();
+      setSession(null);
+      setUser(null);
+      setShowDelete(false);
+    } catch (e: unknown) {
+      setEditError(e instanceof Error ? e.message : "Ошибка удаления");
+      setDeleting(false);
+    }
+  };
+
   if (user) {
     return (
       <div className="max-w-2xl mx-auto space-y-6 animate-fade-in">
@@ -146,13 +225,83 @@ const Profile = () => {
             <div className="w-16 h-16 rounded-full bg-primary/20 flex items-center justify-center">
               <Icon name="User" size={28} className="text-primary" />
             </div>
-            <div>
+            <div className="flex-1">
               <h1 className="text-xl font-bold text-foreground">{user.name}</h1>
               <p className="text-sm text-muted-foreground">
                 +7 ({user.phone.slice(1, 4)}) {user.phone.slice(4, 7)}-{user.phone.slice(7, 9)}-{user.phone.slice(9, 11)}
               </p>
             </div>
+            {!editing && (
+              <button
+                onClick={handleStartEdit}
+                className="flex items-center gap-1.5 px-3 py-2 bg-secondary text-secondary-foreground rounded-lg text-sm hover:bg-secondary/80 transition-colors"
+              >
+                <Icon name="Pencil" size={14} />
+                Изменить
+              </button>
+            )}
           </div>
+
+          {editing && (
+            <div className="space-y-4 mb-6 border-t border-border pt-5">
+              <div>
+                <label className="block text-sm text-muted-foreground mb-1.5">Имя</label>
+                <input
+                  type="text"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="w-full px-4 py-3 rounded-lg border border-border bg-secondary text-foreground text-sm focus:outline-none focus:border-primary transition-colors"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-muted-foreground mb-1.5">Новый пароль (необязательно)</label>
+                <input
+                  type="password"
+                  value={editPassword}
+                  onChange={(e) => setEditPassword(e.target.value)}
+                  placeholder="Оставьте пустым, если не меняете"
+                  className="w-full px-4 py-3 rounded-lg border border-border bg-secondary text-foreground text-sm placeholder:text-muted-foreground focus:outline-none focus:border-primary transition-colors"
+                />
+              </div>
+              {editPassword && (
+                <div>
+                  <label className="block text-sm text-muted-foreground mb-1.5">Подтвердите пароль</label>
+                  <input
+                    type="password"
+                    value={editConfirm}
+                    onChange={(e) => setEditConfirm(e.target.value)}
+                    className="w-full px-4 py-3 rounded-lg border border-border bg-secondary text-foreground text-sm focus:outline-none focus:border-primary transition-colors"
+                  />
+                </div>
+              )}
+              {editError && (
+                <div className="px-4 py-2 rounded-lg bg-destructive/10 text-destructive text-sm">
+                  {editError}
+                </div>
+              )}
+              {editSuccess && (
+                <div className="flex items-center gap-2 text-green-400 text-sm">
+                  <Icon name="CheckCircle" size={14} />
+                  {editSuccess}
+                </div>
+              )}
+              <div className="flex gap-3">
+                <button
+                  onClick={handleSaveProfile}
+                  disabled={saving}
+                  className="flex-1 bg-primary text-primary-foreground py-2.5 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
+                >
+                  {saving ? "Сохранение..." : "Сохранить"}
+                </button>
+                <button
+                  onClick={() => setEditing(false)}
+                  className="px-6 py-2.5 bg-secondary text-secondary-foreground rounded-lg text-sm hover:bg-secondary/80 transition-colors"
+                >
+                  Отмена
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-3 gap-4">
             <div className="bg-secondary rounded-lg p-4 text-center">
@@ -176,6 +325,38 @@ const Profile = () => {
         >
           Выйти из аккаунта
         </button>
+
+        <div className="border-t border-border pt-4">
+          {!showDelete ? (
+            <button
+              onClick={() => setShowDelete(true)}
+              className="text-sm text-muted-foreground hover:text-destructive transition-colors"
+            >
+              Удалить аккаунт
+            </button>
+          ) : (
+            <div className="bg-destructive/10 border border-destructive/20 rounded-xl p-4 space-y-3">
+              <p className="text-sm text-foreground">
+                Вы уверены? Все данные будут удалены без возможности восстановления.
+              </p>
+              <div className="flex gap-3">
+                <button
+                  onClick={handleDeleteAccount}
+                  disabled={deleting}
+                  className="px-6 py-2 bg-destructive text-destructive-foreground rounded-lg text-sm font-medium hover:bg-destructive/90 transition-colors disabled:opacity-50"
+                >
+                  {deleting ? "Удаление..." : "Да, удалить"}
+                </button>
+                <button
+                  onClick={() => setShowDelete(false)}
+                  className="px-6 py-2 bg-secondary text-secondary-foreground rounded-lg text-sm hover:bg-secondary/80 transition-colors"
+                >
+                  Отмена
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     );
   }

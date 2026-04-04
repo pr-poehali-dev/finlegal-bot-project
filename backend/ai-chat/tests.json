@@ -110,6 +110,24 @@
       "expectedStatus": 403,
       "expectedBody": {"error": "string"},
       "bodyMatcher": "partial"
+    },
+    {
+      "name": "Update profile without session",
+      "method": "POST",
+      "path": "/",
+      "body": {"action": "update_profile", "name": "Test"},
+      "expectedStatus": 401,
+      "expectedBody": {"error": "string"},
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Delete account without session",
+      "method": "POST",
+      "path": "/",
+      "body": {"action": "delete_account"},
+      "expectedStatus": 401,
+      "expectedBody": {"error": "string"},
+      "bodyMatcher": "partial"
     }
   ]
 }

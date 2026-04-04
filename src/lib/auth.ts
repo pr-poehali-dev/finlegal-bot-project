@@ -91,3 +91,17 @@ export async function fetchMe(): Promise<UserProfile | null> {
     return null;
   }
 }
+
+export async function updateProfile(data: { name?: string; new_password?: string }): Promise<{ user: UserProfile }> {
+  const token = getToken();
+  return apiCall({ action: 'update_profile', ...data }, { 'X-Session-Id': token });
+}
+
+export async function deleteAccount(): Promise<void> {
+  const token = getToken();
+  await apiCall({ action: 'delete_account' }, { 'X-Session-Id': token });
+  localStorage.removeItem('jurbot_user');
+  localStorage.removeItem('jurbot_token');
+  localStorage.removeItem('jurbot_saved_phone');
+  localStorage.removeItem('jurbot_saved_pass');
+}

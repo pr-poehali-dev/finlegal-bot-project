@@ -11,7 +11,6 @@ const navItems = [
   { path: "/profile", label: "Профиль", icon: "User" },
   { path: "/settings", label: "Настройки", icon: "Settings" },
   { path: "/support", label: "Поддержка", icon: "HelpCircle" },
-  { path: "/admin", label: "Админ", icon: "Shield" },
 ];
 
 interface LayoutProps {

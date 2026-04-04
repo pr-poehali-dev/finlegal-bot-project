@@ -390,8 +390,16 @@ def handle_update_ticket(body):
     return ok({'ok': True})
 
 
+def check_admin(body):
+    password = (body.get('admin_password') or '').strip()
+    expected = os.environ.get('ADMIN_PASSWORD', '')
+    if not expected or password != expected:
+        return False
+    return True
+
+
 def handler(event: dict, context) -> dict:
-    """API: чат с ИИ, регистрация/вход, поддержка, заказы"""
+    """API: чат с ИИ, регистрация/вход, поддержка, заказы, админка"""
 
     if event.get('httpMethod') == 'OPTIONS':
         return {'statusCode': 200, 'headers': CORS, 'body': ''}
@@ -434,13 +442,24 @@ def handler(event: dict, context) -> dict:
     if action == 'check_order':
         return handle_check_order(body)
 
+    if action == 'admin_auth':
+        if check_admin(body):
+            return ok({'ok': True})
+        return err(403, 'Неверный пароль')
+
     if action == 'list_tickets':
+        if not check_admin(body):
+            return err(403, 'Доступ запрещён')
         return handle_list_tickets(body)
 
     if action == 'list_orders':
+        if not check_admin(body):
+            return err(403, 'Доступ запрещён')
         return handle_list_orders(body)
 
     if action == 'update_ticket':
+        if not check_admin(body):
+            return err(403, 'Доступ запрещён')
         return handle_update_ticket(body)
 
     return handle_chat(body)

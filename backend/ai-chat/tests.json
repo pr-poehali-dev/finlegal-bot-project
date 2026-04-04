@@ -76,25 +76,38 @@
       "bodyMatcher": "partial"
     },
     {
-      "name": "List tickets",
+      "name": "Admin auth wrong password",
+      "method": "POST",
+      "path": "/",
+      "body": {"action": "admin_auth", "admin_password": "wrong"},
+      "expectedStatus": 403,
+      "expectedBody": {"error": "string"},
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "List tickets without password",
       "method": "POST",
       "path": "/",
       "body": {"action": "list_tickets"},
-      "expectedStatus": 200
+      "expectedStatus": 403,
+      "expectedBody": {"error": "string"},
+      "bodyMatcher": "partial"
     },
     {
-      "name": "List orders",
+      "name": "List orders without password",
       "method": "POST",
       "path": "/",
       "body": {"action": "list_orders"},
-      "expectedStatus": 200
+      "expectedStatus": 403,
+      "expectedBody": {"error": "string"},
+      "bodyMatcher": "partial"
     },
     {
-      "name": "Update ticket invalid status",
+      "name": "Update ticket without password",
       "method": "POST",
       "path": "/",
-      "body": {"action": "update_ticket", "ticket_id": 1, "status": "invalid"},
-      "expectedStatus": 400,
+      "body": {"action": "update_ticket", "ticket_id": 1, "status": "resolved"},
+      "expectedStatus": 403,
       "expectedBody": {"error": "string"},
       "bodyMatcher": "partial"
     }

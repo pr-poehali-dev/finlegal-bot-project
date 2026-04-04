@@ -1,8 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Icon from "@/components/ui/icon";
 import func2url from "../../backend/func2url.json";
 
 const API_URL = (func2url as Record<string, string>)["ai-chat"] || "";
+const ADMIN_KEY = "jurbot_admin_pwd";
 
 interface Ticket {
   id: number;
@@ -43,6 +44,11 @@ const statusColors: Record<string, string> = {
 };
 
 const Admin = () => {
+  const [authed, setAuthed] = useState(false);
+  const [password, setPassword] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+
   const [tab, setTab] = useState<"tickets" | "orders">("tickets");
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -50,53 +56,110 @@ const Admin = () => {
   const [ordersTotal, setOrdersTotal] = useState(0);
   const [loading, setLoading] = useState(false);
 
-  const loadTickets = async () => {
+  const getPassword = () => sessionStorage.getItem(ADMIN_KEY) || "";
+
+  const handleLogin = async () => {
+    if (!password.trim()) return;
+    setAuthLoading(true);
+    setAuthError("");
+    try {
+      const resp = await fetch(API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "admin_auth", admin_password: password }),
+      });
+      if (!resp.ok) {
+        const data = await resp.json();
+        setAuthError(data.error || "Неверный пароль");
+        return;
+      }
+      sessionStorage.setItem(ADMIN_KEY, password);
+      setAuthed(true);
+    } catch {
+      setAuthError("Ошибка соединения");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    sessionStorage.removeItem(ADMIN_KEY);
+    setAuthed(false);
+    setPassword("");
+    setTickets([]);
+    setOrders([]);
+  };
+
+  const loadTickets = useCallback(async () => {
     setLoading(true);
     try {
       const resp = await fetch(API_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "list_tickets" }),
+        body: JSON.stringify({ action: "list_tickets", admin_password: getPassword() }),
       });
       const data = await resp.json();
       if (resp.ok) {
         setTickets(data.items || []);
         setTicketsTotal(data.total || 0);
+      } else if (resp.status === 403) {
+        handleLogout();
       }
     } catch { /* ignore */ } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const loadOrders = async () => {
+  const loadOrders = useCallback(async () => {
     setLoading(true);
     try {
       const resp = await fetch(API_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "list_orders" }),
+        body: JSON.stringify({ action: "list_orders", admin_password: getPassword() }),
       });
       const data = await resp.json();
       if (resp.ok) {
         setOrders(data.items || []);
         setOrdersTotal(data.total || 0);
+      } else if (resp.status === 403) {
+        handleLogout();
       }
     } catch { /* ignore */ } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    loadTickets();
-    loadOrders();
+    const saved = sessionStorage.getItem(ADMIN_KEY);
+    if (saved) {
+      fetch(API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "admin_auth", admin_password: saved }),
+      }).then((resp) => {
+        if (resp.ok) {
+          setAuthed(true);
+        } else {
+          sessionStorage.removeItem(ADMIN_KEY);
+        }
+      }).catch(() => { /* ignore */ });
+    }
   }, []);
+
+  useEffect(() => {
+    if (authed) {
+      loadTickets();
+      loadOrders();
+    }
+  }, [authed, loadTickets, loadOrders]);
 
   const updateTicketStatus = async (ticketId: number, status: string) => {
     try {
       await fetch(API_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "update_ticket", ticket_id: ticketId, status }),
+        body: JSON.stringify({ action: "update_ticket", ticket_id: ticketId, status, admin_password: getPassword() }),
       });
       setTickets((prev) =>
         prev.map((t) => (t.id === ticketId ? { ...t, status } : t))
@@ -116,6 +179,43 @@ const Admin = () => {
     });
   };
 
+  if (!authed) {
+    return (
+      <div className="max-w-sm mx-auto mt-20 animate-fade-in">
+        <div className="bg-card border border-border rounded-xl p-6 space-y-4">
+          <div className="text-center">
+            <div className="w-12 h-12 rounded-full bg-primary/20 flex items-center justify-center mx-auto mb-3">
+              <Icon name="Shield" size={24} className="text-primary" />
+            </div>
+            <h1 className="text-lg font-semibold text-foreground">Админ-панель</h1>
+            <p className="text-sm text-muted-foreground mt-1">Введите пароль для доступа</p>
+          </div>
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+            placeholder="Пароль"
+            className="w-full bg-secondary border border-border rounded-lg px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+          />
+          {authError && (
+            <div className="flex items-center gap-2 text-red-400 text-sm">
+              <Icon name="AlertCircle" size={14} />
+              {authError}
+            </div>
+          )}
+          <button
+            onClick={handleLogin}
+            disabled={authLoading}
+            className="w-full bg-primary text-primary-foreground py-2.5 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
+          >
+            {authLoading ? "Проверка..." : "Войти"}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-5xl mx-auto space-y-6 animate-fade-in">
       <div className="flex items-center justify-between">
@@ -123,14 +223,23 @@ const Admin = () => {
           <h1 className="text-2xl font-bold text-foreground">Админ-панель</h1>
           <p className="text-muted-foreground text-sm">Обращения и заказы</p>
         </div>
-        <button
-          onClick={() => { loadTickets(); loadOrders(); }}
-          disabled={loading}
-          className="flex items-center gap-2 px-4 py-2 bg-secondary text-secondary-foreground rounded-lg text-sm hover:bg-secondary/80 transition-colors disabled:opacity-50"
-        >
-          <Icon name="RefreshCw" size={14} className={loading ? "animate-spin" : ""} />
-          Обновить
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => { loadTickets(); loadOrders(); }}
+            disabled={loading}
+            className="flex items-center gap-2 px-4 py-2 bg-secondary text-secondary-foreground rounded-lg text-sm hover:bg-secondary/80 transition-colors disabled:opacity-50"
+          >
+            <Icon name="RefreshCw" size={14} className={loading ? "animate-spin" : ""} />
+            Обновить
+          </button>
+          <button
+            onClick={handleLogout}
+            className="flex items-center gap-2 px-4 py-2 bg-secondary text-red-400 rounded-lg text-sm hover:bg-secondary/80 transition-colors"
+          >
+            <Icon name="LogOut" size={14} />
+            Выйти
+          </button>
+        </div>
       </div>
 
       <div className="flex gap-3">

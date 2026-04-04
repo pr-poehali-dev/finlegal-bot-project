@@ -21,7 +21,7 @@ const now = () =>
 const AI_CHAT_URL = (func2url as Record<string, string>)["ai-chat"] || "";
 const PAYMENT_URL = (func2url as Record<string, string>)["create-payment"] || "";
 
-const PRICE_REGEX = /(\d[\d\s]*)\s*₽/;
+const PRICE_REGEX = /(?:^|[^\d])(\d[\d\s.,]*)[\s]*₽/;
 
 const readFileContent = (file: File): Promise<string> => {
   return new Promise((resolve) => {
@@ -133,8 +133,12 @@ const Chat = () => {
       let paymentDescription: string | undefined;
 
       if (priceMatch) {
-        paymentAmount = parseInt(priceMatch[1].replace(/\s/g, ""), 10);
-        paymentDescription = selectedService || "Юридическая услуга";
+        const cleaned = priceMatch[1].replace(/[\s.,]/g, "");
+        const parsed = parseInt(cleaned, 10);
+        if (!isNaN(parsed) && parsed >= 100 && parsed <= 10_000_000) {
+          paymentAmount = parsed;
+          paymentDescription = selectedService || "Юридическая услуга";
+        }
       }
 
       setMessages((prev) => [
@@ -166,7 +170,6 @@ const Chat = () => {
   const handlePayment = async (amount: number, description: string) => {
     setIsPaying(true);
     try {
-      // Create order first
       const orderResp = await fetch(AI_CHAT_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -178,17 +181,18 @@ const Chat = () => {
         }),
       });
       const orderData = await orderResp.json();
-      if (orderResp.ok && orderData.order_id) {
-        setCurrentOrderId(orderData.order_id);
+      if (!orderResp.ok || !orderData.order_id) {
+        throw new Error(orderData.error || "Не удалось создать заказ");
       }
+      setCurrentOrderId(orderData.order_id);
 
-      // Create payment URL
       const resp = await fetch(PAYMENT_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           amount,
           description,
+          label: orderData.payment_label,
           return_url: window.location.href,
         }),
       });
@@ -208,13 +212,13 @@ const Chat = () => {
           },
         ]);
       }
-    } catch {
+    } catch (e) {
       setMessages((prev) => [
         ...prev,
         {
           id: Date.now().toString(),
           role: "bot",
-          text: "Не удалось создать платёж. Попробуйте позже.",
+          text: e instanceof Error ? e.message : "Не удалось создать платёж. Попробуйте позже.",
           time: now(),
         },
       ]);

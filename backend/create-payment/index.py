@@ -45,6 +45,7 @@ def handler(event: dict, context) -> dict:
         'targets': description[:128],
         'sum': f"{float(amount):.2f}",
         'successURL': body.get('return_url', ''),
+        'label': body.get('label', ''),
     }
 
     payment_url = f"https://yoomoney.ru/quickpay/confirm.xml?{urllib.parse.urlencode(params)}"

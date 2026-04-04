@@ -1,15 +1,65 @@
+import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import Icon from "@/components/ui/icon";
-import { getStoredUser } from "@/lib/auth";
+import { getStoredUser, getUserOrders } from "@/lib/auth";
+
+interface OrderItem {
+  id: number;
+  service: string;
+  amount: number;
+  status: string;
+  created_at: string;
+  paid_at: string | null;
+}
 
 const statusLabels: Record<string, { text: string; color: string }> = {
+  paid: { text: "Оплачено", color: "text-green-400 bg-green-400/10" },
   completed: { text: "Выполнено", color: "text-green-400 bg-green-400/10" },
   in_progress: { text: "В работе", color: "text-yellow-400 bg-yellow-400/10" },
   pending: { text: "Ожидает оплаты", color: "text-orange-400 bg-orange-400/10" },
+  cancelled: { text: "Отменён", color: "text-red-400 bg-red-400/10" },
 };
+
+function formatDate(dateStr: string | null): string {
+  if (!dateStr) return "—";
+  try {
+    const d = new Date(dateStr);
+    return d.toLocaleDateString("ru-RU", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return dateStr;
+  }
+}
+
+function formatPrice(amount: number): string {
+  return amount.toLocaleString("ru-RU") + " \u20BD";
+}
 
 const History = () => {
   const user = getStoredUser();
+  const [items, setItems] = useState<OrderItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!user) {
+      setLoading(false);
+      return;
+    }
+    getUserOrders()
+      .then((data) => {
+        setItems(data.items || []);
+      })
+      .catch((e) => {
+        setError(e.message || "Не удалось загрузить историю");
+      })
+      .finally(() => setLoading(false));
+  }, []);
 
   if (!user) {
     return (
@@ -38,13 +88,40 @@ const History = () => {
     );
   }
 
-  const historyItems: {
-    id: string;
-    service: string;
-    status: string;
-    date: string;
-    price: string;
-  }[] = [];
+  if (loading) {
+    return (
+      <div className="max-w-4xl mx-auto space-y-6 animate-fade-in">
+        <div>
+          <h1 className="text-2xl font-bold text-foreground mb-1">История заказов</h1>
+          <p className="text-muted-foreground text-sm">
+            Все ваши обращения и результаты работы
+          </p>
+        </div>
+        <div className="bg-card border border-border rounded-xl p-12 text-center">
+          <Icon name="Loader2" size={32} className="text-primary mx-auto mb-3 animate-spin" />
+          <p className="text-muted-foreground text-sm">Загрузка истории...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="max-w-4xl mx-auto space-y-6 animate-fade-in">
+        <div>
+          <h1 className="text-2xl font-bold text-foreground mb-1">История заказов</h1>
+          <p className="text-muted-foreground text-sm">
+            Все ваши обращения и результаты работы
+          </p>
+        </div>
+        <div className="bg-card border border-border rounded-xl p-12 text-center">
+          <Icon name="AlertTriangle" size={32} className="text-red-400 mx-auto mb-3" />
+          <p className="text-foreground font-medium mb-2">Ошибка загрузки</p>
+          <p className="text-muted-foreground text-sm">{error}</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-4xl mx-auto space-y-6 animate-fade-in">
@@ -55,7 +132,7 @@ const History = () => {
         </p>
       </div>
 
-      {historyItems.length === 0 ? (
+      {items.length === 0 ? (
         <div className="bg-card border border-border rounded-xl p-12 text-center">
           <Icon name="Inbox" size={48} className="text-muted-foreground mx-auto mb-4" />
           <p className="text-foreground font-medium mb-2">История пока пуста</p>
@@ -72,8 +149,11 @@ const History = () => {
         </div>
       ) : (
         <div className="space-y-3">
-          {historyItems.map((item) => {
-            const status = statusLabels[item.status];
+          {items.map((item) => {
+            const status = statusLabels[item.status] || {
+              text: item.status,
+              color: "text-muted-foreground bg-secondary",
+            };
             return (
               <div
                 key={item.id}
@@ -85,7 +165,7 @@ const History = () => {
                     <div className="flex items-center gap-3 text-xs text-muted-foreground">
                       <span className="flex items-center gap-1">
                         <Icon name="Calendar" size={12} />
-                        {item.date}
+                        {formatDate(item.created_at)}
                       </span>
                       <span className={`px-2 py-0.5 rounded-full ${status.color}`}>
                         {status.text}
@@ -93,13 +173,9 @@ const History = () => {
                     </div>
                   </div>
                   <div className="flex items-center gap-4">
-                    <span className="text-sm font-semibold text-accent">{item.price}</span>
-                    {item.status === "completed" && (
-                      <button className="text-xs px-3 py-1.5 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors flex items-center gap-1">
-                        <Icon name="Download" size={12} />
-                        Скачать
-                      </button>
-                    )}
+                    <span className="text-sm font-semibold text-accent">
+                      {formatPrice(item.amount)}
+                    </span>
                     <Link
                       to="/chat"
                       className="text-xs px-3 py-1.5 rounded-lg bg-primary/10 text-primary hover:bg-primary/20 transition-colors"

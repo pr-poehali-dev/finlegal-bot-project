@@ -23,10 +23,10 @@ const features = [
 ];
 
 const stats = [
-  { value: "10 000+", label: "Обработано документов" },
-  { value: "98%", label: "Точность анализа" },
-  { value: "24/7", label: "Доступность бота" },
-  { value: "15 мин", label: "Среднее время ответа" },
+  { value: "AI", label: "На базе Qwen AI" },
+  { value: "24/7", label: "Доступность" },
+  { value: "3 мин", label: "Время ответа" },
+  { value: "RU", label: "Законодательство РФ" },
 ];
 
 const Index = () => {

@@ -211,6 +211,30 @@ def handle_user_stats(event, s3):
     return ok({'orders': total_orders, 'spent': total_spent, 'completed': completed})
 
 
+def handle_user_orders(event, s3):
+    user, phone, _ = get_user_by_session(event, s3)
+    if not user:
+        return err(401, 'Не авторизован')
+    conn = get_db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, service_name, amount, status, created_at, paid_at FROM orders WHERE user_phone = %s ORDER BY created_at DESC LIMIT 50",
+                (phone,),
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+    items = []
+    for r in rows:
+        items.append({
+            'id': r[0], 'service': r[1], 'amount': float(r[2]) if r[2] else 0,
+            'status': r[3], 'created_at': str(r[4]) if r[4] else None,
+            'paid_at': str(r[5]) if r[5] else None,
+        })
+    return ok({'items': items})
+
+
 def handle_support_ticket(body):
     message = (body.get('message') or '').strip()
     phone = (body.get('phone') or '').strip()
@@ -473,7 +497,7 @@ def check_admin(body):
 
 
 def handler(event: dict, context) -> dict:
-    """API: чат с ИИ, регистрация/вход, поддержка, заказы, админка"""
+    """API: чат, авторизация, поддержка, заказы, профиль, админка"""
 
     if event.get('httpMethod') == 'OPTIONS':
         return {'statusCode': 200, 'headers': CORS, 'body': ''}
@@ -515,6 +539,10 @@ def handler(event: dict, context) -> dict:
     if action == 'user_stats':
         s3 = get_s3()
         return handle_user_stats(event, s3)
+
+    if action == 'user_orders':
+        s3 = get_s3()
+        return handle_user_orders(event, s3)
 
     if action == 'support_ticket':
         return handle_support_ticket(body)

@@ -102,6 +102,11 @@ export async function getUserStats(): Promise<{ orders: number; spent: number; c
   return apiCall({ action: 'user_stats' }, { 'X-Session-Id': token });
 }
 
+export async function getUserOrders(): Promise<{ items: Array<{ id: number; service: string; amount: number; status: string; created_at: string; paid_at: string | null }> }> {
+  const token = getToken();
+  return apiCall({ action: 'user_orders' }, { 'X-Session-Id': token });
+}
+
 export async function deleteAccount(): Promise<void> {
   const token = getToken();
   await apiCall({ action: 'delete_account' }, { 'X-Session-Id': token });

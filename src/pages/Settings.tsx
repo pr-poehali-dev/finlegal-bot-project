@@ -1,18 +1,14 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import Icon from "@/components/ui/icon";
 
 const SETTINGS_KEY = "jurbot_settings";
 
 interface SettingsData {
-  notifications: boolean;
-  emailNotify: boolean;
   autoDownload: boolean;
   exportFormat: string;
 }
 
 const defaultSettings: SettingsData = {
-  notifications: true,
-  emailNotify: false,
   autoDownload: true,
   exportFormat: "pdf",
 };
@@ -73,34 +69,11 @@ const Settings = () => {
           <p className="text-muted-foreground text-sm">Управление параметрами приложения</p>
         </div>
         {hasChanges && (
-          <span className="text-xs text-muted-foreground">Есть несохранённые изменения</span>
+          <span className="text-xs text-muted-foreground">Есть несохраненные изменения</span>
         )}
       </div>
 
       <div className="bg-card border border-border rounded-xl divide-y divide-border">
-        <div className="p-5">
-          <h2 className="text-sm font-semibold text-foreground mb-4 flex items-center gap-2">
-            <Icon name="Bell" size={16} className="text-primary" />
-            Уведомления
-          </h2>
-          <div className="space-y-4">
-            <label className="flex items-center justify-between cursor-pointer">
-              <span className="text-sm text-muted-foreground">Push-уведомления</span>
-              <Toggle
-                value={settings.notifications}
-                onChange={(v) => update("notifications", v)}
-              />
-            </label>
-            <label className="flex items-center justify-between cursor-pointer">
-              <span className="text-sm text-muted-foreground">Email-уведомления</span>
-              <Toggle
-                value={settings.emailNotify}
-                onChange={(v) => update("emailNotify", v)}
-              />
-            </label>
-          </div>
-        </div>
-
         <div className="p-5">
           <h2 className="text-sm font-semibold text-foreground mb-4 flex items-center gap-2">
             <Icon name="Download" size={16} className="text-primary" />
@@ -133,20 +106,6 @@ const Settings = () => {
                 ))}
               </div>
             </div>
-          </div>
-        </div>
-
-        <div className="p-5">
-          <h2 className="text-sm font-semibold text-foreground mb-4 flex items-center gap-2">
-            <Icon name="CreditCard" size={16} className="text-primary" />
-            Платежи
-          </h2>
-          <p className="text-sm text-muted-foreground mb-3">
-            Оплата проходит через защищённый сервис YooMoney
-          </p>
-          <div className="bg-secondary rounded-lg p-3 text-xs text-muted-foreground">
-            Данные карт не сохраняются на нашем сервисе. Все транзакции защищены
-            шифрованием PCI DSS.
           </div>
         </div>
       </div>

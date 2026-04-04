@@ -5,6 +5,7 @@ import secrets
 import urllib.request
 import urllib.error
 import boto3
+import psycopg2
 from botocore.exceptions import ClientError
 
 
@@ -24,6 +25,10 @@ def get_s3():
         aws_access_key_id=os.environ['AWS_ACCESS_KEY_ID'],
         aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY'],
     )
+
+
+def get_db():
+    return psycopg2.connect(os.environ['DATABASE_URL'])
 
 
 def load_json_s3(s3, key):
@@ -132,9 +137,109 @@ def handle_me(event, s3):
     return ok({'id': user['id'], 'phone': user['phone'], 'name': user['name']})
 
 
+def handle_support_ticket(body):
+    message = (body.get('message') or '').strip()
+    phone = (body.get('phone') or '').strip()
+    name = (body.get('name') or '').strip()
+
+    if not message:
+        return err(400, 'Сообщение не может быть пустым')
+
+    conn = get_db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO support_tickets (user_phone, user_name, message, status) VALUES (%s, %s, %s, %s)",
+                (phone, name, message, 'new'),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return ok({'ok': True})
+
+
+def handle_create_order(body):
+    phone = (body.get('phone') or '').strip()
+    service_name = (body.get('service_name') or '').strip()
+    amount = body.get('amount', 0)
+
+    if not service_name or not amount:
+        return err(400, 'Укажите название услуги и сумму')
+
+    payment_label = secrets.token_hex(16)
+
+    conn = get_db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO orders (user_phone, service_name, amount, status, payment_label) VALUES (%s, %s, %s, %s, %s) RETURNING id",
+                (phone, service_name, float(amount), 'pending', payment_label),
+            )
+            order_id = cur.fetchone()[0]
+        conn.commit()
+    finally:
+        conn.close()
+
+    return ok({'order_id': order_id, 'payment_label': payment_label})
+
+
+def handle_confirm_payment(body):
+    order_id = body.get('order_id')
+    if not order_id:
+        return err(400, 'Укажите order_id')
+
+    conn = get_db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE orders SET status = 'paid', paid_at = NOW() WHERE id = %s",
+                (int(order_id),),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return ok({'ok': True})
+
+
+def handle_check_order(body):
+    order_id = body.get('order_id')
+    if not order_id:
+        return err(400, 'Укажите order_id')
+
+    conn = get_db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, user_phone, service_name, amount, status, payment_label, result, created_at, paid_at FROM orders WHERE id = %s",
+                (int(order_id),),
+            )
+            row = cur.fetchone()
+    finally:
+        conn.close()
+
+    if not row:
+        return err(404, 'Заказ не найден')
+
+    return ok({
+        'id': row[0],
+        'user_phone': row[1],
+        'service_name': row[2],
+        'amount': float(row[3]) if row[3] else 0,
+        'status': row[4],
+        'payment_label': row[5],
+        'result': row[6],
+        'created_at': str(row[7]) if row[7] else None,
+        'paid_at': str(row[8]) if row[8] else None,
+    })
+
+
 def handle_chat(body):
     messages = body.get('messages', [])
     service = body.get('service', '')
+    files = body.get('files', [])
+    paid = body.get('paid', False)
 
     if not messages:
         return err(400, 'No messages')
@@ -144,11 +249,41 @@ def handle_chat(body):
         "Ты помогаешь пользователям с анализом договоров, консультациями по законодательству РФ, "
         "подготовкой документов и финансовым анализом. "
         "Отвечай кратко, по делу, структурированно. Используй списки и выделение где уместно. "
-        "Если пользователь загрузил файлы — предложи расчёт стоимости. "
         "Если вопрос выходит за рамки компетенции — честно сообщи об этом."
     )
     if service:
         system_prompt += f"\nПользователь выбрал услугу: {service}. Учитывай это в ответах."
+
+    if files and not paid:
+        system_prompt += (
+            "\n\nПользователь загрузил файлы, но НЕ оплатил услугу. "
+            "Проведи КРАТКИЙ предварительный обзор файлов: укажи тип документа, объём, основные разделы. "
+            "Назови примерную стоимость анализа в рублях (₽). "
+            "В конце ОБЯЗАТЕЛЬНО напиши: «Для получения полного анализа необходимо оплатить услугу.»"
+        )
+    elif files and paid:
+        system_prompt += (
+            "\n\nПользователь загрузил файлы и ОПЛАТИЛ услугу. "
+            "Проведи ПОЛНЫЙ детальный анализ всех предоставленных документов. "
+            "Выяви риски, проблемы, дай рекомендации."
+        )
+
+    # Build the last user message with file contents if present
+    if files and messages:
+        last_msg = messages[-1]
+        file_block = ""
+        for f in files:
+            fname = f.get('name', 'file')
+            fcontent = f.get('content', '')
+            file_block += f'[Содержимое файла "{fname}":]\n{fcontent}\n\n'
+
+        user_text = last_msg.get('content', '')
+        combined_content = file_block + f"[Пользователь спрашивает:]\n{user_text}"
+
+        # Replace the last message content with combined version
+        messages = list(messages)  # copy
+        messages[-1] = dict(messages[-1])
+        messages[-1]['content'] = combined_content
 
     api_messages = [{"role": "system", "content": system_prompt}]
     for msg in messages[-10:]:
@@ -190,7 +325,7 @@ def handle_chat(body):
 
 
 def handler(event: dict, context) -> dict:
-    """API: чат с ИИ + регистрация/вход по телефону и паролю"""
+    """API: чат с ИИ, регистрация/вход, поддержка, заказы"""
 
     if event.get('httpMethod') == 'OPTIONS':
         return {'statusCode': 200, 'headers': CORS, 'body': ''}
@@ -220,5 +355,17 @@ def handler(event: dict, context) -> dict:
     if action == 'me':
         s3 = get_s3()
         return handle_me(event, s3)
+
+    if action == 'support_ticket':
+        return handle_support_ticket(body)
+
+    if action == 'create_order':
+        return handle_create_order(body)
+
+    if action == 'confirm_payment':
+        return handle_confirm_payment(body)
+
+    if action == 'check_order':
+        return handle_check_order(body)
 
     return handle_chat(body)

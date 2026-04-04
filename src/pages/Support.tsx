@@ -1,5 +1,9 @@
 import { useState } from "react";
 import Icon from "@/components/ui/icon";
+import func2url from "../../backend/func2url.json";
+import { getStoredUser } from "@/lib/auth";
+
+const AI_CHAT_URL = (func2url as Record<string, string>)["ai-chat"] || "";
 
 const faq = [
   {
@@ -28,12 +32,41 @@ const Support = () => {
   const [openIdx, setOpenIdx] = useState<number | null>(null);
   const [message, setMessage] = useState("");
   const [sent, setSent] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState("");
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!message.trim()) return;
-    setSent(true);
-    setMessage("");
-    setTimeout(() => setSent(false), 3000);
+    setSending(true);
+    setError("");
+
+    try {
+      const user = getStoredUser();
+      const resp = await fetch(AI_CHAT_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "support_ticket",
+          message: message.trim(),
+          phone: user?.phone || "",
+          name: user?.name || "",
+        }),
+      });
+
+      const data = await resp.json();
+      if (!resp.ok) {
+        throw new Error(data.error || "Ошибка отправки");
+      }
+
+      setSent(true);
+      setMessage("");
+      setTimeout(() => setSent(false), 3000);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Не удалось отправить сообщение";
+      setError(msg);
+    } finally {
+      setSending(false);
+    }
   };
 
   return (
@@ -86,11 +119,18 @@ const Support = () => {
               rows={4}
               className="w-full bg-secondary border border-border rounded-lg px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring resize-none"
             />
+            {error && (
+              <div className="flex items-center gap-2 text-red-400 text-sm">
+                <Icon name="AlertCircle" size={16} />
+                {error}
+              </div>
+            )}
             <button
               onClick={handleSubmit}
-              className="bg-primary text-primary-foreground px-6 py-2.5 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors"
+              disabled={sending}
+              className="bg-primary text-primary-foreground px-6 py-2.5 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
             >
-              Отправить
+              {sending ? "Отправка..." : "Отправить"}
             </button>
           </div>
         )}

@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { useSearchParams } from "react-router-dom";
 import Icon from "@/components/ui/icon";
 import func2url from "../../backend/func2url.json";
+import { getStoredUser } from "@/lib/auth";
 
 interface Message {
   id: string;
@@ -11,15 +12,32 @@ interface Message {
   files?: { name: string; size: string }[];
   paymentAmount?: number;
   paymentDescription?: string;
+  showConfirmPayment?: boolean;
 }
 
 const now = () =>
   new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
 
-const AI_CHAT_URL = func2url["ai-chat"];
-const PAYMENT_URL = func2url["create-payment"];
+const AI_CHAT_URL = (func2url as Record<string, string>)["ai-chat"] || "";
+const PAYMENT_URL = (func2url as Record<string, string>)["create-payment"] || "";
 
 const PRICE_REGEX = /(\d[\d\s]*)\s*₽/;
+
+const readFileContent = (file: File): Promise<string> => {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    if (file.type === "text/plain" || file.name.endsWith(".txt") || file.name.endsWith(".md")) {
+      reader.onload = () => resolve(reader.result as string);
+      reader.readAsText(file);
+    } else {
+      reader.onload = () => {
+        const base64 = (reader.result as string).split(",")[1] || "";
+        resolve(`[base64:${file.name}]${base64}`);
+      };
+      reader.readAsDataURL(file);
+    }
+  });
+};
 
 const Chat = () => {
   const [searchParams] = useSearchParams();
@@ -38,6 +56,8 @@ const Chat = () => {
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [isPaying, setIsPaying] = useState(false);
+  const [isPaid, setIsPaid] = useState(false);
+  const [currentOrderId, setCurrentOrderId] = useState<number | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -55,11 +75,6 @@ const Chat = () => {
       size: (f.size / 1024).toFixed(0) + " КБ",
     }));
 
-    const filesMention =
-      attachedFiles.length > 0
-        ? `\n[Прикреплены файлы: ${attachedFiles.map((f) => f.name).join(", ")}]`
-        : "";
-
     const userMsg: Message = {
       id: Date.now().toString(),
       role: "user",
@@ -70,6 +85,15 @@ const Chat = () => {
 
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
+
+    // Read file contents before clearing attached files
+    const fileContents = await Promise.all(
+      attachedFiles.map(async (f) => ({
+        name: f.name,
+        content: await readFileContent(f),
+      }))
+    );
+
     setAttachedFiles([]);
     setIsTyping(true);
 
@@ -82,7 +106,7 @@ const Chat = () => {
 
     chatHistory.push({
       role: "user",
-      content: (userText || "Анализируй прикреплённые файлы") + filesMention,
+      content: userText || "Анализируй прикреплённые файлы",
     });
 
     try {
@@ -92,6 +116,8 @@ const Chat = () => {
         body: JSON.stringify({
           messages: chatHistory,
           service: selectedService || "",
+          files: fileContents.length > 0 ? fileContents : undefined,
+          paid: isPaid,
         }),
       });
 
@@ -140,6 +166,23 @@ const Chat = () => {
   const handlePayment = async (amount: number, description: string) => {
     setIsPaying(true);
     try {
+      // Create order first
+      const orderResp = await fetch(AI_CHAT_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "create_order",
+          phone: getStoredUser()?.phone || "anonymous",
+          service_name: description,
+          amount,
+        }),
+      });
+      const orderData = await orderResp.json();
+      if (orderResp.ok && orderData.order_id) {
+        setCurrentOrderId(orderData.order_id);
+      }
+
+      // Create payment URL
       const resp = await fetch(PAYMENT_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -149,12 +192,8 @@ const Chat = () => {
           return_url: window.location.href,
         }),
       });
-
       const data = await resp.json();
-
-      if (!resp.ok) {
-        throw new Error(data.error || "Ошибка создания платежа");
-      }
+      if (!resp.ok) throw new Error(data.error || "Ошибка создания платежа");
 
       if (data.payment_url) {
         window.open(data.payment_url, "_blank");
@@ -163,8 +202,9 @@ const Chat = () => {
           {
             id: Date.now().toString(),
             role: "bot",
-            text: `Открыта страница оплаты.\n\nСумма: ${amount.toLocaleString("ru-RU")} ₽\nДоступны: банковская карта, СБП\n\nПосле оплаты вернитесь в чат — я приступлю к работе.`,
+            text: `Открыта страница оплаты.\n\nСумма: ${amount.toLocaleString("ru-RU")} ₽\nДоступны: банковская карта, СБП\n\nПосле оплаты нажмите кнопку «Я оплатил(а)» ниже.`,
             time: now(),
+            showConfirmPayment: true,
           },
         ]);
       }
@@ -174,13 +214,37 @@ const Chat = () => {
         {
           id: Date.now().toString(),
           role: "bot",
-          text: "Не удалось создать платёж. Проверьте настройки оплаты или попробуйте позже.",
+          text: "Не удалось создать платёж. Попробуйте позже.",
           time: now(),
         },
       ]);
     } finally {
       setIsPaying(false);
     }
+  };
+
+  const handleConfirmPayment = async () => {
+    if (currentOrderId) {
+      try {
+        await fetch(AI_CHAT_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "confirm_payment", order_id: currentOrderId }),
+        });
+      } catch {
+        // silently ignore confirmation errors
+      }
+    }
+    setIsPaid(true);
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: Date.now().toString(),
+        role: "bot",
+        text: "Оплата подтверждена! Теперь я проведу полный анализ ваших документов. Отправьте файлы или задайте вопрос.",
+        time: now(),
+      },
+    ]);
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -269,6 +333,16 @@ const Chat = () => {
                 >
                   <Icon name="CreditCard" size={16} />
                   {isPaying ? "Создаю платёж..." : `Оплатить ${msg.paymentAmount.toLocaleString("ru-RU")} ₽`}
+                </button>
+              )}
+
+              {msg.showConfirmPayment && !isPaid && (
+                <button
+                  onClick={handleConfirmPayment}
+                  className="mt-2 bg-green-600 text-white px-4 py-2 rounded-lg text-xs hover:bg-green-700 transition-colors flex items-center gap-1"
+                >
+                  <Icon name="CheckCircle" size={14} />
+                  Я оплатил(а)
                 </button>
               )}
             </div>

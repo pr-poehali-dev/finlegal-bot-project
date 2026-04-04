@@ -47,6 +47,33 @@
       "method": "GET",
       "path": "/",
       "expectedStatus": 405
+    },
+    {
+      "name": "Support ticket without message",
+      "method": "POST",
+      "path": "/",
+      "body": {"action": "support_ticket"},
+      "expectedStatus": 400,
+      "expectedBody": {"error": "string"},
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Support ticket with message",
+      "method": "POST",
+      "path": "/",
+      "body": {"action": "support_ticket", "message": "Test support message", "phone": "79001234567", "name": "Test User"},
+      "expectedStatus": 200,
+      "expectedBody": {"ok": true},
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Create order missing fields",
+      "method": "POST",
+      "path": "/",
+      "body": {"action": "create_order"},
+      "expectedStatus": 400,
+      "expectedBody": {"error": "string"},
+      "bodyMatcher": "partial"
     }
   ]
 }

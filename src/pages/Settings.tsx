@@ -10,7 +10,7 @@ interface SettingsData {
 
 const defaultSettings: SettingsData = {
   autoDownload: true,
-  exportFormat: "pdf",
+  exportFormat: "txt",
 };
 
 function loadSettings(): SettingsData {
@@ -91,7 +91,7 @@ const Settings = () => {
             <div>
               <span className="text-sm text-muted-foreground block mb-2">Формат по умолчанию</span>
               <div className="flex gap-2">
-                {["pdf", "docx", "txt", "md"].map((fmt) => (
+                {["txt", "md", "json"].map((fmt) => (
                   <button
                     key={fmt}
                     onClick={() => update("exportFormat", fmt)}

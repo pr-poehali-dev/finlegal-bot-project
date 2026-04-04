@@ -2,11 +2,32 @@ import json
 import os
 import hashlib
 import secrets
+import smtplib
+from email.mime.text import MIMEText
 import urllib.request
 import urllib.error
 import boto3
 import psycopg2
 from botocore.exceptions import ClientError
+
+
+NOTIFY_EMAIL = 'f18887268@gmail.com'
+
+
+def send_email_notification(subject, body_text):
+    app_password = os.environ.get('GMAIL_APP_PASSWORD', '')
+    if not app_password:
+        return
+    try:
+        msg = MIMEText(body_text, 'plain', 'utf-8')
+        msg['Subject'] = subject
+        msg['From'] = NOTIFY_EMAIL
+        msg['To'] = NOTIFY_EMAIL
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=10) as smtp:
+            smtp.login(NOTIFY_EMAIL, app_password.replace(' ', ''))
+            smtp.send_message(msg)
+    except Exception:
+        pass
 
 
 CORS = {
@@ -253,6 +274,11 @@ def handle_support_ticket(body):
         conn.commit()
     finally:
         conn.close()
+
+    send_email_notification(
+        f'��рБот: новое обращение от {name or phone or "аноним"}',
+        f'Имя: {name}\nТелефон: {phone}\n\nСообщение:\n{message}',
+    )
 
     return ok({'ok': True})
 

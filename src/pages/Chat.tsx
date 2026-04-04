@@ -253,22 +253,43 @@ const Chat = () => {
     }
   };
 
-  const handleExport = (format: string) => {
-    const lastBotMsg = [...messages].reverse().find((m) => m.role === "bot");
-    if (!lastBotMsg) return;
+  const getPreferredFormat = (): string => {
+    try {
+      const raw = localStorage.getItem("jurbot_settings");
+      if (raw) {
+        const s = JSON.parse(raw);
+        if (s.exportFormat) return s.exportFormat;
+      }
+    } catch { /* ignore */ }
+    return "txt";
+  };
 
-    const content =
-      format === "txt"
-        ? lastBotMsg.text
-        : format === "json"
-          ? JSON.stringify({ response: lastBotMsg.text, time: lastBotMsg.time }, null, 2)
-          : `# Ответ ЮрБот\n\n${lastBotMsg.text}\n\n---\n_${lastBotMsg.time}_`;
+  const handleExport = (format: string) => {
+    const chatMessages = messages.filter((m) => m.id !== "1");
+    if (chatMessages.length === 0) return;
+
+    let content: string;
+    if (format === "json") {
+      content = JSON.stringify(
+        chatMessages.map((m) => ({ role: m.role, text: m.text, time: m.time })),
+        null,
+        2
+      );
+    } else if (format === "md") {
+      content = chatMessages
+        .map((m) => `### ${m.role === "bot" ? "ЮрБот" : "Вы"} (${m.time})\n\n${m.text}`)
+        .join("\n\n---\n\n");
+    } else {
+      content = chatMessages
+        .map((m) => `[${m.time}] ${m.role === "bot" ? "ЮрБот" : "Вы"}:\n${m.text}`)
+        .join("\n\n");
+    }
 
     const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `jurbot-response.${format}`;
+    a.download = `jurbot-chat.${format}`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -283,16 +304,24 @@ const Chat = () => {
           )}
         </div>
         <div className="flex gap-2">
-          {["txt", "md", "json"].map((fmt) => (
-            <button
-              key={fmt}
-              onClick={() => handleExport(fmt)}
-              className="text-xs px-3 py-1.5 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors flex items-center gap-1"
-            >
-              <Icon name="Download" size={12} />
-              .{fmt}
-            </button>
-          ))}
+          <button
+            onClick={() => handleExport(getPreferredFormat())}
+            className="text-xs px-3 py-1.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors flex items-center gap-1"
+          >
+            <Icon name="Download" size={12} />
+            Скачать .{getPreferredFormat()}
+          </button>
+          {["txt", "md", "json"]
+            .filter((f) => f !== getPreferredFormat())
+            .map((fmt) => (
+              <button
+                key={fmt}
+                onClick={() => handleExport(fmt)}
+                className="text-xs px-3 py-1.5 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors flex items-center gap-1"
+              >
+                .{fmt}
+              </button>
+            ))}
         </div>
       </div>
 

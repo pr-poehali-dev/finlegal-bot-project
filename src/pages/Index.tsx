@@ -106,7 +106,7 @@ const Index = () => {
           {[
             { step: "01", icon: "ListChecks", text: "Выберите услугу" },
             { step: "02", icon: "Upload", text: "Загрузите документы" },
-            { step: "03", icon: "CreditCard", text: "Оплатите через ЮKassa" },
+            { step: "03", icon: "CreditCard", text: "Оплатите через YooMoney" },
             { step: "04", icon: "Download", text: "Получите результат" },
           ].map((item) => (
             <div key={item.step} className="flex flex-col items-center gap-3">

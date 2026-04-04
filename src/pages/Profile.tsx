@@ -10,6 +10,7 @@ import {
   clearCredentials,
   updateProfile,
   deleteAccount,
+  getUserStats,
   UserProfile,
 } from "@/lib/auth";
 
@@ -149,6 +150,13 @@ const Profile = () => {
   const [editSuccess, setEditSuccess] = useState("");
   const [showDelete, setShowDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [stats, setStats] = useState({ orders: 0, spent: 0, completed: 0 });
+
+  useEffect(() => {
+    if (user) {
+      getUserStats().then(setStats).catch(() => { /* ignore */ });
+    }
+  }, [user]);
 
   const handleStartEdit = () => {
     setEditName(user?.name || "");
@@ -305,15 +313,15 @@ const Profile = () => {
 
           <div className="grid grid-cols-3 gap-4">
             <div className="bg-secondary rounded-lg p-4 text-center">
-              <div className="text-2xl font-bold text-primary">0</div>
+              <div className="text-2xl font-bold text-primary">{stats.orders}</div>
               <div className="text-xs text-muted-foreground">Заказов</div>
             </div>
             <div className="bg-secondary rounded-lg p-4 text-center">
-              <div className="text-2xl font-bold text-accent">0 ₽</div>
+              <div className="text-2xl font-bold text-accent">{stats.spent.toLocaleString("ru-RU")} ₽</div>
               <div className="text-xs text-muted-foreground">Потрачено</div>
             </div>
             <div className="bg-secondary rounded-lg p-4 text-center">
-              <div className="text-2xl font-bold text-green-400">0</div>
+              <div className="text-2xl font-bold text-green-400">{stats.completed}</div>
               <div className="text-xs text-muted-foreground">Выполнено</div>
             </div>
           </div>

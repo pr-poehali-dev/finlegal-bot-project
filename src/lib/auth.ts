@@ -97,6 +97,11 @@ export async function updateProfile(data: { name?: string; new_password?: string
   return apiCall({ action: 'update_profile', ...data }, { 'X-Session-Id': token });
 }
 
+export async function getUserStats(): Promise<{ orders: number; spent: number; completed: number }> {
+  const token = getToken();
+  return apiCall({ action: 'user_stats' }, { 'X-Session-Id': token });
+}
+
 export async function deleteAccount(): Promise<void> {
   const token = getToken();
   await apiCall({ action: 'delete_account' }, { 'X-Session-Id': token });

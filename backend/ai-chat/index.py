@@ -193,6 +193,24 @@ def handle_delete_account(event, s3):
     return ok({'ok': True})
 
 
+def handle_user_stats(event, s3):
+    user, phone, _ = get_user_by_session(event, s3)
+    if not user:
+        return err(401, 'Не авторизован')
+    conn = get_db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*), COALESCE(SUM(amount),0) FROM orders WHERE user_phone = %s", (phone,))
+            row = cur.fetchone()
+            total_orders = row[0]
+            total_spent = float(row[1])
+            cur.execute("SELECT COUNT(*) FROM orders WHERE user_phone = %s AND status = 'paid'", (phone,))
+            completed = cur.fetchone()[0]
+    finally:
+        conn.close()
+    return ok({'orders': total_orders, 'spent': total_spent, 'completed': completed})
+
+
 def handle_support_ticket(body):
     message = (body.get('message') or '').strip()
     phone = (body.get('phone') or '').strip()
@@ -493,6 +511,10 @@ def handler(event: dict, context) -> dict:
     if action == 'delete_account':
         s3 = get_s3()
         return handle_delete_account(event, s3)
+
+    if action == 'user_stats':
+        s3 = get_s3()
+        return handle_user_stats(event, s3)
 
     if action == 'support_ticket':
         return handle_support_ticket(body)

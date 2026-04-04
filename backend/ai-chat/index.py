@@ -324,6 +324,72 @@ def handle_chat(body):
     return ok({'reply': reply})
 
 
+def handle_list_tickets(body):
+    limit = min(int(body.get('limit', 50)), 200)
+    offset = int(body.get('offset', 0))
+    conn = get_db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, user_phone, user_name, message, status, created_at FROM support_tickets ORDER BY created_at DESC LIMIT %s OFFSET %s",
+                (limit, offset),
+            )
+            rows = cur.fetchall()
+            cur.execute("SELECT COUNT(*) FROM support_tickets")
+            total = cur.fetchone()[0]
+    finally:
+        conn.close()
+    items = []
+    for r in rows:
+        items.append({
+            'id': r[0], 'phone': r[1], 'name': r[2],
+            'message': r[3], 'status': r[4],
+            'created_at': str(r[5]) if r[5] else None,
+        })
+    return ok({'items': items, 'total': total})
+
+
+def handle_list_orders(body):
+    limit = min(int(body.get('limit', 50)), 200)
+    offset = int(body.get('offset', 0))
+    conn = get_db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, user_phone, service_name, amount, status, payment_label, created_at, paid_at FROM orders ORDER BY created_at DESC LIMIT %s OFFSET %s",
+                (limit, offset),
+            )
+            rows = cur.fetchall()
+            cur.execute("SELECT COUNT(*) FROM orders")
+            total = cur.fetchone()[0]
+    finally:
+        conn.close()
+    items = []
+    for r in rows:
+        items.append({
+            'id': r[0], 'phone': r[1], 'service': r[2],
+            'amount': float(r[3]) if r[3] else 0, 'status': r[4],
+            'label': r[5], 'created_at': str(r[6]) if r[6] else None,
+            'paid_at': str(r[7]) if r[7] else None,
+        })
+    return ok({'items': items, 'total': total})
+
+
+def handle_update_ticket(body):
+    ticket_id = body.get('ticket_id')
+    status = body.get('status', '')
+    if not ticket_id or status not in ('new', 'in_progress', 'resolved', 'closed'):
+        return err(400, 'Укажите ticket_id и корректный status')
+    conn = get_db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE support_tickets SET status = %s WHERE id = %s", (status, int(ticket_id)))
+        conn.commit()
+    finally:
+        conn.close()
+    return ok({'ok': True})
+
+
 def handler(event: dict, context) -> dict:
     """API: чат с ИИ, регистрация/вход, поддержка, заказы"""
 
@@ -367,5 +433,14 @@ def handler(event: dict, context) -> dict:
 
     if action == 'check_order':
         return handle_check_order(body)
+
+    if action == 'list_tickets':
+        return handle_list_tickets(body)
+
+    if action == 'list_orders':
+        return handle_list_orders(body)
+
+    if action == 'update_ticket':
+        return handle_update_ticket(body)
 
     return handle_chat(body)

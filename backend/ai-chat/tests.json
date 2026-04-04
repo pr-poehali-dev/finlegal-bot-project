@@ -74,6 +74,29 @@
       "expectedStatus": 400,
       "expectedBody": {"error": "string"},
       "bodyMatcher": "partial"
+    },
+    {
+      "name": "List tickets",
+      "method": "POST",
+      "path": "/",
+      "body": {"action": "list_tickets"},
+      "expectedStatus": 200
+    },
+    {
+      "name": "List orders",
+      "method": "POST",
+      "path": "/",
+      "body": {"action": "list_orders"},
+      "expectedStatus": 200
+    },
+    {
+      "name": "Update ticket invalid status",
+      "method": "POST",
+      "path": "/",
+      "body": {"action": "update_ticket", "ticket_id": 1, "status": "invalid"},
+      "expectedStatus": 400,
+      "expectedBody": {"error": "string"},
+      "bodyMatcher": "partial"
     }
   ]
 }

@@ -12,6 +12,7 @@ import History from "./pages/History";
 import Profile from "./pages/Profile";
 import Settings from "./pages/Settings";
 import Support from "./pages/Support";
+import Admin from "./pages/Admin";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -32,6 +33,7 @@ const App = () => (
             <Route path="/profile" element={<Profile />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/support" element={<Support />} />
+            <Route path="/admin" element={<Admin />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </Layout>

@@ -628,10 +628,20 @@ def _call_ddg_chat(system_prompt, messages, model='gpt-4o-mini'):
     return result if result else None
 
 
-def _call_gemini_free(system_prompt, messages):
+GEMINI_MODELS = [
+    'gemini-2.5-flash-lite',
+    'gemini-2.5-flash',
+    'gemini-2.0-flash',
+]
+
+
+def _call_gemini_free(system_prompt, messages, model=None):
     api_key = os.environ.get('GEMINI_API_KEY', '')
     if not api_key:
+        print('Gemini: no API key')
         return None
+
+    model = model or GEMINI_MODELS[0]
 
     contents = []
     for msg in messages:
@@ -646,7 +656,8 @@ def _call_gemini_free(system_prompt, messages):
         "generationConfig": {"maxOutputTokens": 4096, "temperature": 0.7},
     }).encode('utf-8')
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key={api_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    print(f'Gemini: calling {model}...')
     req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
 
     with urllib.request.urlopen(req, timeout=55) as resp:
@@ -654,31 +665,46 @@ def _call_gemini_free(system_prompt, messages):
 
     candidates = data.get('candidates', [])
     if not candidates:
+        print(f'Gemini {model}: no candidates')
         return None
     parts = candidates[0].get('content', {}).get('parts', [])
     reply = ''.join(p.get('text', '') for p in parts)
+    print(f'Gemini {model}: got {len(reply)} chars')
     return reply.strip() if reply else None
 
 
 def _call_ai(system_prompt, messages):
-    ddg_models = ['gpt-4o-mini', 'claude-3-haiku-20240307', 'mistralai/Mistral-Small-24B-Instruct-2501']
+    import time
 
+    for model in GEMINI_MODELS:
+        try:
+            result = _call_gemini_free(system_prompt, messages, model)
+            if result:
+                return result, None
+        except urllib.error.HTTPError as e:
+            body = ''
+            try:
+                body = e.read().decode('utf-8')[:300] if e.fp else ''
+            except Exception:
+                pass
+            print(f'Gemini {model} HTTPError {e.code}: {body}')
+            if e.code == 429:
+                time.sleep(1)
+                continue
+            if e.code in (400, 404):
+                continue
+        except Exception as e:
+            print(f'Gemini {model} error: {type(e).__name__}: {str(e)[:200]}')
+            continue
+
+    ddg_models = ['gpt-4o-mini', 'claude-3-haiku-20240307']
     for model in ddg_models:
         try:
             result = _call_ddg_chat(system_prompt, messages, model)
             if result:
-                print(f'AI response from DuckDuckGo ({model})')
                 return result, None
         except Exception as e:
             print(f'DDG {model} error: {type(e).__name__}: {str(e)[:200]}')
-
-    try:
-        result = _call_gemini_free(system_prompt, messages)
-        if result:
-            print('AI response from Gemini')
-            return result, None
-    except Exception as e:
-        print(f'Gemini error: {type(e).__name__}: {str(e)[:200]}')
 
     return None, 'AI временно недоступен. Попробуйте через минуту.'
 

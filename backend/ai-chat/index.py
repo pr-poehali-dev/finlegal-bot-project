@@ -3,12 +3,16 @@ import os
 import hashlib
 import secrets
 import smtplib
+import base64
+import io
 from email.mime.text import MIMEText
 import urllib.request
 import urllib.error
 import boto3
 import psycopg2
 from botocore.exceptions import ClientError
+from PyPDF2 import PdfReader
+from docx import Document
 
 
 NOTIFY_EMAIL = 'f18887268@gmail.com'
@@ -359,6 +363,38 @@ def handle_check_order(body):
     })
 
 
+def _extract_text_from_binary(fname, b64_content):
+    fname_lower = fname.lower()
+    try:
+        raw = base64.b64decode(b64_content)
+        buf = io.BytesIO(raw)
+
+        if fname_lower.endswith('.pdf'):
+            reader = PdfReader(buf)
+            pages = []
+            for page in reader.pages:
+                text = page.extract_text()
+                if text:
+                    pages.append(text)
+            if not pages:
+                return '[PDF-файл не содержит извлекаемого текста (возможно, отсканированный документ)]'
+            return '\n\n'.join(pages)
+
+        if fname_lower.endswith('.docx'):
+            doc = Document(buf)
+            paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+            if not paragraphs:
+                return '[DOCX-файл пустой или не содержит текста]'
+            return '\n'.join(paragraphs)
+
+        if fname_lower.endswith('.doc'):
+            return '[Формат .doc (старый Word) не поддерживается. Пожалуйста, сохраните файл как .docx]'
+
+        return '[Неподдерживаемый бинарный формат]'
+    except Exception as e:
+        return f'[Ошибка при чтении файла: {str(e)[:200]}]'
+
+
 def handle_chat(body):
     messages = body.get('messages', [])
     service = body.get('service', '')
@@ -398,6 +434,11 @@ def handle_chat(body):
         for f in files:
             fname = f.get('name', 'file')
             fcontent = f.get('content', '')
+            encoding = f.get('encoding', '')
+
+            if encoding == 'base64':
+                fcontent = _extract_text_from_binary(fname, fcontent)
+
             if len(fcontent) > 50000:
                 fcontent = fcontent[:50000] + '\n... (текст обрезан, файл слишком большой)'
             file_block += f'[Содержимое файла "{fname}":]\n{fcontent}\n\n'

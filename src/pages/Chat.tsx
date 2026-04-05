@@ -23,27 +23,49 @@ const PAYMENT_URL = (func2url as Record<string, string>)["create-payment"] || ""
 
 const PRICE_REGEX = /(?:^|[^\d])(\d[\d\s.,]*)[\s]*₽/;
 
-const MAX_FILE_SIZE = 512 * 1024;
+const MAX_FILE_SIZE = 3 * 1024 * 1024;
+
+const TEXT_EXTS = [".txt", ".md", ".csv", ".json", ".xml", ".html", ".htm", ".css", ".js", ".ts", ".py", ".sql", ".log", ".ini", ".cfg", ".yaml", ".yml", ".toml", ".env", ".rtf"];
+const DOC_EXTS = [".pdf", ".docx", ".doc"];
+const SUPPORTED_EXTS = [...TEXT_EXTS, ...DOC_EXTS];
 
 const isTextFile = (file: File): boolean => {
-  const textExts = [".txt", ".md", ".csv", ".json", ".xml", ".html", ".htm", ".css", ".js", ".ts", ".py", ".sql", ".log", ".ini", ".cfg", ".yaml", ".yml", ".toml", ".env", ".rtf"];
   const name = file.name.toLowerCase();
-  return file.type.startsWith("text/") || textExts.some((ext) => name.endsWith(ext));
+  return file.type.startsWith("text/") || TEXT_EXTS.some((ext) => name.endsWith(ext));
 };
 
-const readFileContent = (file: File): Promise<string> => {
+const isDocFile = (file: File): boolean => {
+  const name = file.name.toLowerCase();
+  return DOC_EXTS.some((ext) => name.endsWith(ext));
+};
+
+const readFileContent = (file: File): Promise<{ name: string; content: string; encoding?: string }> => {
   return new Promise((resolve) => {
     if (file.size > MAX_FILE_SIZE) {
-      resolve(`[Файл "${file.name}" слишком большой: ${(file.size / 1024).toFixed(0)} КБ, максимум 512 КБ. Загрузите файл меньшего размера.]`);
+      resolve({ name: file.name, content: `[Файл слишком большой: ${(file.size / 1024 / 1024).toFixed(1)} МБ, максимум 3 МБ]` });
       return;
     }
-    if (isTextFile(file)) {
+    const name = file.name.toLowerCase();
+    const supported = SUPPORTED_EXTS.some((ext) => name.endsWith(ext)) || file.type.startsWith("text/");
+    if (!supported) {
+      resolve({ name: file.name, content: `[Формат не поддерживается (${file.type || "unknown"}). Поддерживаются: ${SUPPORTED_EXTS.join(", ")}]` });
+      return;
+    }
+    if (isDocFile(file)) {
       const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = () => resolve(`[Не удалось прочитать файл "${file.name}"]`);
+      reader.onload = () => {
+        const base64 = (reader.result as string).split(",")[1] || "";
+        resolve({ name: file.name, content: base64, encoding: "base64" });
+      };
+      reader.onerror = () => resolve({ name: file.name, content: `[Не удалось прочитать файл]` });
+      reader.readAsDataURL(file);
+    } else if (isTextFile(file)) {
+      const reader = new FileReader();
+      reader.onload = () => resolve({ name: file.name, content: reader.result as string });
+      reader.onerror = () => resolve({ name: file.name, content: `[Не удалось прочитать файл]` });
       reader.readAsText(file);
     } else {
-      resolve(`[Файл "${file.name}" (${(file.size / 1024).toFixed(0)} КБ) — бинарный формат (${file.type || "unknown"}). Поддерживаются только текстовые файлы: .txt, .md, .csv, .json, .xml, .html и др.]`);
+      resolve({ name: file.name, content: `[Формат не поддерживается]` });
     }
   });
 };
@@ -95,13 +117,7 @@ const Chat = () => {
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
 
-    // Read file contents before clearing attached files
-    const fileContents = await Promise.all(
-      attachedFiles.map(async (f) => ({
-        name: f.name,
-        content: await readFileContent(f),
-      }))
-    );
+    const fileContents = await Promise.all(attachedFiles.map((f) => readFileContent(f)));
 
     setAttachedFiles([]);
     setIsTyping(true);

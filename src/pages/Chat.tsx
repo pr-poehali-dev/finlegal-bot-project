@@ -1,122 +1,23 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
-import Icon from "@/components/ui/icon";
 import func2url from "../../backend/func2url.json";
 import { getStoredUser } from "@/lib/auth";
-
-interface Message {
-  id: string;
-  role: "user" | "bot";
-  text: string;
-  time: string;
-  files?: { name: string; size: string }[];
-  paymentAmount?: number;
-  paymentDescription?: string;
-  showConfirmPayment?: boolean;
-}
-
-interface SavedSession {
-  messages: Message[];
-  service: string;
-  orderId: number | null;
-  isPaid: boolean;
-  fileContents: Array<{ name: string; content: string; encoding?: string }>;
-  pendingPayment: boolean;
-  timestamp: number;
-}
-
-const SESSION_KEY = "jurbot_chat_session";
-const SESSION_TTL = 3600000;
-
-const now = () =>
-  new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+import {
+  type Message,
+  type FileContent,
+  now,
+  PRICE_REGEX,
+  readFileContent,
+  saveSession,
+  loadSession,
+  clearSession,
+} from "./chat/chat-types";
+import ChatHeader from "./chat/ChatHeader";
+import ChatMessages from "./chat/ChatMessages";
+import ChatInput from "./chat/ChatInput";
 
 const AI_CHAT_URL = (func2url as Record<string, string>)["ai-chat"] || "";
 const PAYMENT_URL = (func2url as Record<string, string>)["create-payment"] || "";
-
-const PRICE_REGEX = /(?:^|[^\d])(\d[\d\s.,]*)[\s]*₽/;
-
-const MAX_FILE_SIZE = 3 * 1024 * 1024;
-
-const TEXT_EXTS = [".txt", ".md", ".csv", ".json", ".xml", ".html", ".htm", ".css", ".js", ".ts", ".py", ".sql", ".log", ".ini", ".cfg", ".yaml", ".yml", ".toml", ".env", ".rtf"];
-const DOC_EXTS = [".pdf", ".docx", ".doc"];
-const SUPPORTED_EXTS = [...TEXT_EXTS, ...DOC_EXTS];
-
-const isTextFile = (file: File): boolean => {
-  const name = file.name.toLowerCase();
-  return file.type.startsWith("text/") || TEXT_EXTS.some((ext) => name.endsWith(ext));
-};
-
-const isDocFile = (file: File): boolean => {
-  const name = file.name.toLowerCase();
-  return DOC_EXTS.some((ext) => name.endsWith(ext));
-};
-
-const readFileContent = (file: File): Promise<{ name: string; content: string; encoding?: string }> => {
-  return new Promise((resolve) => {
-    if (file.size > MAX_FILE_SIZE) {
-      resolve({ name: file.name, content: `[Файл слишком большой: ${(file.size / 1024 / 1024).toFixed(1)} МБ, максимум 3 МБ]` });
-      return;
-    }
-    const name = file.name.toLowerCase();
-    const supported = SUPPORTED_EXTS.some((ext) => name.endsWith(ext)) || file.type.startsWith("text/");
-    if (!supported) {
-      resolve({ name: file.name, content: `[Формат не поддерживается (${file.type || "unknown"}). Поддерживаются: ${SUPPORTED_EXTS.join(", ")}]` });
-      return;
-    }
-    if (isDocFile(file)) {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const base64 = (reader.result as string).split(",")[1] || "";
-        resolve({ name: file.name, content: base64, encoding: "base64" });
-      };
-      reader.onerror = () => resolve({ name: file.name, content: `[Не удалось прочитать файл]` });
-      reader.readAsDataURL(file);
-    } else if (isTextFile(file)) {
-      const reader = new FileReader();
-      reader.onload = () => resolve({ name: file.name, content: reader.result as string });
-      reader.onerror = () => resolve({ name: file.name, content: `[Не удалось прочитать файл]` });
-      reader.readAsText(file);
-    } else {
-      resolve({ name: file.name, content: `[Формат не поддерживается]` });
-    }
-  });
-};
-
-const saveSession = (data: Partial<SavedSession> & { messages: Message[] }) => {
-  try {
-    const existing = loadSession();
-    const session: SavedSession = {
-      messages: data.messages,
-      service: data.service ?? existing?.service ?? "",
-      orderId: data.orderId ?? existing?.orderId ?? null,
-      isPaid: data.isPaid ?? existing?.isPaid ?? false,
-      fileContents: data.fileContents ?? existing?.fileContents ?? [],
-      pendingPayment: data.pendingPayment ?? existing?.pendingPayment ?? false,
-      timestamp: Date.now(),
-    };
-    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-  } catch { /* quota exceeded */ }
-};
-
-const loadSession = (): SavedSession | null => {
-  try {
-    const raw = localStorage.getItem(SESSION_KEY);
-    if (!raw) return null;
-    const session: SavedSession = JSON.parse(raw);
-    if (Date.now() - session.timestamp > SESSION_TTL) {
-      localStorage.removeItem(SESSION_KEY);
-      return null;
-    }
-    return session;
-  } catch {
-    return null;
-  }
-};
-
-const clearSession = () => {
-  localStorage.removeItem(SESSION_KEY);
-};
 
 const Chat = () => {
   const [searchParams] = useSearchParams();
@@ -146,7 +47,7 @@ const Chat = () => {
   const [isPaid, setIsPaid] = useState(saved?.isPaid ?? false);
   const [currentOrderId, setCurrentOrderId] = useState<number | null>(saved?.orderId ?? null);
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
-  const [lastFileContents, setLastFileContents] = useState<Array<{ name: string; content: string; encoding?: string }>>(saved?.fileContents ?? []);
+  const [lastFileContents, setLastFileContents] = useState<FileContent[]>(saved?.fileContents ?? []);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const returnHandledRef = useRef(false);
@@ -177,7 +78,7 @@ const Chat = () => {
     URL.revokeObjectURL(url);
   }, []);
 
-  const runPaidAnalysis = useCallback(async (files: Array<{ name: string; content: string; encoding?: string }>, service: string, orderId: number | null) => {
+  const runPaidAnalysis = useCallback(async (files: FileContent[], service: string, orderId: number | null) => {
     if (orderId) {
       try {
         await fetch(AI_CHAT_URL, {
@@ -511,160 +412,35 @@ const Chat = () => {
 
   return (
     <div className="max-w-4xl mx-auto flex flex-col h-[calc(100vh-7rem)] animate-fade-in">
-      <div className="flex items-center justify-between mb-4">
-        <div>
-          <h1 className="text-lg font-semibold text-foreground">Чат-бот</h1>
-          {(selectedService || saved?.service) && (
-            <p className="text-xs text-primary">Услуга: {selectedService || saved?.service}</p>
-          )}
-        </div>
-        <div className="flex gap-2">
-          <button
-            onClick={handleNewChat}
-            className="text-xs px-3 py-1.5 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors flex items-center gap-1"
-          >
-            <Icon name="Plus" size={12} />
-            Новый чат
-          </button>
-          <button
-            onClick={() => handleExport(getPreferredFormat())}
-            className="text-xs px-3 py-1.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors flex items-center gap-1"
-          >
-            <Icon name="Download" size={12} />
-            Скачать .{getPreferredFormat()}
-          </button>
-          {["txt", "md", "json"]
-            .filter((f) => f !== getPreferredFormat())
-            .map((fmt) => (
-              <button
-                key={fmt}
-                onClick={() => handleExport(fmt)}
-                className="text-xs px-3 py-1.5 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors flex items-center gap-1"
-              >
-                .{fmt}
-              </button>
-            ))}
-        </div>
-      </div>
+      <ChatHeader
+        serviceName={selectedService || saved?.service || null}
+        messages={messages}
+        onNewChat={handleNewChat}
+        onExport={handleExport}
+        preferredFormat={getPreferredFormat()}
+      />
 
-      <div className="flex-1 overflow-y-auto space-y-4 pr-2">
-        {messages.map((msg) => (
-          <div
-            key={msg.id}
-            className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-          >
-            <div
-              className={`max-w-[80%] rounded-xl px-4 py-3 ${
-                msg.role === "user"
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-card border border-border text-foreground"
-              }`}
-            >
-              {msg.files && msg.files.length > 0 && (
-                <div className="mb-2 space-y-1">
-                  {msg.files.map((f) => (
-                    <div
-                      key={f.name}
-                      className="flex items-center gap-2 text-xs opacity-80"
-                    >
-                      <Icon name="Paperclip" size={12} />
-                      {f.name} ({f.size})
-                    </div>
-                  ))}
-                </div>
-              )}
-              <p className="text-sm whitespace-pre-wrap">{msg.text}</p>
-              <span className="text-[10px] opacity-50 mt-1 block">{msg.time}</span>
+      <ChatMessages
+        ref={messagesEndRef}
+        messages={messages}
+        isTyping={isTyping}
+        isPaying={isPaying}
+        isPaid={isPaid}
+        onPayment={handlePayment}
+        onConfirmPayment={handleConfirmPayment}
+      />
 
-              {msg.paymentAmount && msg.paymentDescription && !isPaid && (
-                <button
-                  onClick={() => handlePayment(msg.paymentAmount!, msg.paymentDescription!)}
-                  disabled={isPaying}
-                  className="mt-3 w-full flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 text-white font-medium text-sm px-4 py-2.5 rounded-lg transition-colors disabled:opacity-50"
-                >
-                  <Icon name="CreditCard" size={16} />
-                  {isPaying ? "Создаю платёж..." : `Оплатить ${msg.paymentAmount.toLocaleString("ru-RU")} ₽`}
-                </button>
-              )}
-
-              {msg.showConfirmPayment && !isPaid && (
-                <button
-                  onClick={handleConfirmPayment}
-                  className="mt-2 w-full bg-green-600 text-white px-4 py-2.5 rounded-lg text-sm font-medium hover:bg-green-700 transition-colors flex items-center justify-center gap-2"
-                >
-                  <Icon name="CheckCircle" size={16} />
-                  Я оплатил(а)
-                </button>
-              )}
-            </div>
-          </div>
-        ))}
-        {isTyping && (
-          <div className="flex justify-start">
-            <div className="bg-card border border-border rounded-xl px-4 py-3">
-              <div className="flex gap-1">
-                <span className="w-2 h-2 bg-muted-foreground rounded-full animate-pulse" />
-                <span className="w-2 h-2 bg-muted-foreground rounded-full animate-pulse delay-100" />
-                <span className="w-2 h-2 bg-muted-foreground rounded-full animate-pulse delay-200" />
-              </div>
-            </div>
-          </div>
-        )}
-        <div ref={messagesEndRef} />
-      </div>
-
-      {attachedFiles.length > 0 && (
-        <div className="flex gap-2 flex-wrap mt-2 px-1">
-          {attachedFiles.map((f, i) => (
-            <div
-              key={i}
-              className="flex items-center gap-1 bg-secondary text-secondary-foreground text-xs px-2 py-1 rounded-lg"
-            >
-              <Icon name="File" size={12} />
-              {f.name}
-              <button
-                onClick={() =>
-                  setAttachedFiles((prev) => prev.filter((_, idx) => idx !== i))
-                }
-                className="ml-1 hover:text-destructive"
-              >
-                <Icon name="X" size={12} />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <div className="mt-3 flex gap-2">
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          onChange={handleFileChange}
-          className="hidden"
-          accept=".pdf,.doc,.docx,.txt,.xls,.xlsx,.jpg,.png,.rtf"
-        />
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          className="p-3 bg-secondary text-secondary-foreground rounded-lg hover:bg-secondary/80 transition-colors"
-        >
-          <Icon name="Paperclip" size={18} />
-        </button>
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSend()}
-          placeholder="Введите сообщение..."
-          className="flex-1 bg-card border border-border rounded-lg px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-        />
-        <button
-          onClick={handleSend}
-          disabled={isTyping}
-          className="p-3 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
-        >
-          <Icon name="Send" size={18} />
-        </button>
-      </div>
+      <ChatInput
+        ref={fileInputRef}
+        input={input}
+        isTyping={isTyping}
+        attachedFiles={attachedFiles}
+        onInputChange={setInput}
+        onSend={handleSend}
+        onFileChange={handleFileChange}
+        onRemoveFile={(i) => setAttachedFiles((prev) => prev.filter((_, idx) => idx !== i))}
+        onAttachClick={() => fileInputRef.current?.click()}
+      />
     </div>
   );
 };

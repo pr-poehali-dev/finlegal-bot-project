@@ -472,13 +472,22 @@ def handle_chat(body):
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=55) as resp:
             data = json.loads(resp.read().decode('utf-8'))
     except urllib.error.HTTPError as e:
-        error_body = e.read().decode('utf-8') if e.fp else ''
-        return err(502, f'AI error: {e.code}')
+        error_body = ''
+        try:
+            error_body = e.read().decode('utf-8') if e.fp else ''
+        except Exception:
+            pass
+        print(f'AI HTTPError {e.code}: {error_body[:500]}')
+        return err(502, f'AI временно недоступен (код {e.code}). Попробуйте через минуту.')
+    except urllib.error.URLError as e:
+        print(f'AI URLError: {e.reason}')
+        return err(502, 'Не удалось подключиться к AI. Попробуйте через минуту.')
     except Exception as e:
-        return err(502, str(e))
+        print(f'AI Exception: {type(e).__name__}: {str(e)[:300]}')
+        return err(502, 'Ошибка при обращении к AI. Попробуйте через минуту.')
 
     reply = data.get('choices', [{}])[0].get('message', {}).get('content', 'Не удалось получить ответ.')
     if reply.startswith('<think>'):

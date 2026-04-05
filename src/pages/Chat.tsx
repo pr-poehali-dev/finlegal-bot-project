@@ -177,13 +177,14 @@ const Chat = () => {
           paymentDescription,
         },
       ]);
-    } catch {
+    } catch (e) {
+      const errorText = e instanceof Error ? e.message : "Неизвестная ошибка";
       setMessages((prev) => [
         ...prev,
         {
           id: (Date.now() + 1).toString(),
           role: "bot",
-          text: "Извините, произошла ошибка при обращении к AI. Попробуйте ещё раз.",
+          text: errorText,
           time: now(),
         },
       ]);

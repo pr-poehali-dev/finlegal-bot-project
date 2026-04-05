@@ -395,7 +395,165 @@ def _extract_text_from_binary(fname, b64_content):
         return f'[Ошибка при чтении файла: {str(e)[:200]}]'
 
 
+SERVICE_PROMPTS = {
+    'Экспресс-проверка договора': (
+        "Услуга: Экспресс-проверка договора.\n"
+        "Задача: быстро проверить договор, выявить явные риски, кабальные условия, "
+        "несоответствия законодательству РФ. Дай краткое заключение с пометками «⚠️ Риск» для проблемных пунктов."
+    ),
+    'Полный анализ договора': (
+        "Услуга: Полный анализ договора.\n"
+        "Задача: детальный постатейный анализ. По каждому разделу: описание, риски, рекомендации по исправлению. "
+        "Отметь соответствие ГК РФ, ЗоЗПП и другим применимым законам. Дай итоговое заключение."
+    ),
+    'Анализ сложного контракта': (
+        "Услуга: Анализ сложного контракта.\n"
+        "Задача: глубокий экспертный анализ сложного контракта (корпоративные, международные, инвестиционные). "
+        "Анализируй перекрёстные ссылки, приложения, условия расторжения, форс-мажор, арбитражные оговорки. "
+        "Дай развёрнутое экспертное заключение."
+    ),
+    'Комплексная экспертиза пакета': (
+        "Услуга: Комплексная экспертиза пакета документов.\n"
+        "Задача: полная экспертиза пакета связанных документов. Проверь взаимосвязи, противоречия между документами, "
+        "юридическую целостность пакета. Дай сводный отчёт и рекомендации."
+    ),
+    'Устная консультация': (
+        "Услуга: Устная консультация.\n"
+        "Задача: дай чёткий, понятный ответ на вопрос пользователя. "
+        "Ссылайся на конкретные статьи законов РФ. Объясняй простым языком."
+    ),
+    'Письменное заключение': (
+        "Услуга: Письменное заключение.\n"
+        "Задача: подготовь структурированное письменное заключение. Формат: "
+        "1) Суть вопроса, 2) Применимые нормы, 3) Анализ, 4) Выводы и рекомендации. "
+        "Пиши в формальном стиле, пригодном для официального использования."
+    ),
+    'Правовой анализ ситуации': (
+        "Услуга: Правовой анализ ситуации.\n"
+        "Задача: комплексный анализ правовой ситуации. Рассмотри все стороны, возможные сценарии развития, "
+        "судебную практику. Дай пошаговый план действий с оценкой рисков каждого варианта."
+    ),
+    'Стратегическое консультирование': (
+        "Услуга: Стратегическое консультирование.\n"
+        "Задача: разработай правовую стратегию. Учти бизнес-контекст, долгосрочные риски, "
+        "налоговые последствия, регуляторные требования. Предложи несколько стратегий с pros/cons."
+    ),
+    'Типовой документ': (
+        "Услуга: Подготовка типового документа.\n"
+        "Задача: составь юридический документ по запросу (договор, заявление, претензия, доверенность и т.д.). "
+        "Используй актуальные шаблоны, соответствующие законодательству РФ. Все поля должны быть заполнены или отмечены как [заполнить]."
+    ),
+    'Нестандартный документ': (
+        "Услуга: Подготовка нестандартного документа.\n"
+        "Задача: составь документ по индивидуальным требованиям. Учти специфику ситуации, "
+        "нестандартные условия. Объясни логику каждого пункта."
+    ),
+    'Пакет юридических документов': (
+        "Услуга: Подготовка пакета юридических документов.\n"
+        "Задача: подготовь комплект взаимосвязанных документов. Обеспечь согласованность между документами, "
+        "единую терминологию, перекрёстные ссылки."
+    ),
+    'Полный комплект под проект': (
+        "Услуга: Полный комплект документов под проект.\n"
+        "Задача: разработай полный пакет документации для проекта. Учти все этапы, стороны, "
+        "регуляторные требования. Включи чек-лист для проверки комплектности."
+    ),
+}
+
+
+def _build_system_prompt(service, files, paid):
+    """Собрать системный промпт в зависимости от услуги"""
+    base = (
+        "Ты — профессиональный финансово-юридический помощник ЮрБот. "
+        "Отвечай на русском языке, кратко, по делу, структурированно. "
+        "Используй списки и выделение где уместно. "
+        "Если вопрос выходит за рамки компетенции — честно сообщи об этом."
+    )
+
+    service_block = SERVICE_PROMPTS.get(service, '')
+    if service_block:
+        base += f"\n\n{service_block}"
+    elif service:
+        base += f"\nПользователь выбрал услугу: {service}. Учитывай это в ответах."
+
+    if files and not paid:
+        base += (
+            "\n\nПользователь загрузил файлы, но НЕ оплатил услугу. "
+            "Проведи КРАТКИЙ предварительный обзор: тип документа, объём, основные разделы. "
+            "В конце напиши: «Для получения полного анализа необходимо оплатить услугу.»"
+        )
+    elif files and paid:
+        base += (
+            "\n\nПользователь загрузил файлы и ОПЛАТИЛ услугу. "
+            "Выполни услугу ПОЛНОСТЬЮ по загруженным документам. "
+            "Будь максимально детален и полезен."
+        )
+
+    return base
+
+
+def _call_gemini(system_prompt, messages):
+    """Вызвать Google Gemini 2.5 Flash Lite API"""
+    api_key = os.environ.get('GEMINI_API_KEY', '')
+    if not api_key:
+        return None, 'API key not configured'
+
+    contents = []
+    for msg in messages:
+        role = 'user' if msg.get('role', 'user') == 'user' else 'model'
+        contents.append({"role": role, "parts": [{"text": msg.get("content", "")}]})
+
+    payload = json.dumps({
+        "system_instruction": {"parts": [{"text": system_prompt}]},
+        "contents": contents,
+        "generationConfig": {
+            "maxOutputTokens": 2048,
+            "temperature": 0.7,
+        },
+    }).encode('utf-8')
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={api_key}"
+
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=55) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+    except urllib.error.HTTPError as e:
+        error_body = ''
+        try:
+            error_body = e.read().decode('utf-8') if e.fp else ''
+        except Exception:
+            pass
+        print(f'Gemini HTTPError {e.code}: {error_body[:500]}')
+        if e.code in (401, 403):
+            return None, 'Ключ AI-сервиса недействителен. Обратитесь к администратору.'
+        return None, f'AI временно недоступен (код {e.code}). Попробуйте через минуту.'
+    except urllib.error.URLError as e:
+        print(f'Gemini URLError: {e.reason}')
+        return None, 'Не удалось подключиться к AI. Попробуйте через минуту.'
+    except Exception as e:
+        print(f'Gemini Exception: {type(e).__name__}: {str(e)[:300]}')
+        return None, 'Ошибка при обращении к AI. Попробуйте через минуту.'
+
+    candidates = data.get('candidates', [])
+    if not candidates:
+        return None, 'AI не вернул ответ. Попробуйте переформулировать вопрос.'
+
+    parts = candidates[0].get('content', {}).get('parts', [])
+    reply = ''.join(p.get('text', '') for p in parts).strip()
+    if not reply:
+        return None, 'Не удалось получить ответ от AI.'
+
+    return reply, None
+
+
 def handle_chat(body):
+    """Чат с AI-ассистентом ЮрБот на базе Gemini 2.5 Flash Lite"""
     messages = body.get('messages', [])
     service = body.get('service', '')
     files = body.get('files', [])
@@ -403,30 +561,6 @@ def handle_chat(body):
 
     if not messages:
         return err(400, 'No messages')
-
-    system_prompt = (
-        "Ты — профессиональный финансово-юридический помощник ЮрБот. "
-        "Ты помогаешь пользователям с анализом договоров, консультациями по законодательству РФ, "
-        "подготовкой документов и финансовым анализом. "
-        "Отвечай кратко, по делу, структурированно. Используй списки и выделение где уместно. "
-        "Если вопрос выходит за рамки компетенции — честно сообщи об этом."
-    )
-    if service:
-        system_prompt += f"\nПользователь выбрал услугу: {service}. Учитывай это в ответах."
-
-    if files and not paid:
-        system_prompt += (
-            "\n\nПользователь загрузил файлы, но НЕ оплатил услугу. "
-            "Проведи КРАТКИЙ предварительный обзор файлов: укажи тип документа, объём, основные разделы. "
-            "Назови примерную стоимость анализа в рублях (₽). "
-            "В конце ОБЯЗАТЕЛЬНО напиши: «Для получения полного анализа необходимо оплатить услугу.»"
-        )
-    elif files and paid:
-        system_prompt += (
-            "\n\nПользователь загрузил файлы и ОПЛАТИЛ услугу. "
-            "Проведи ПОЛНЫЙ детальный анализ всех предоставленных документов. "
-            "Выяви риски, проблемы, дай рекомендации."
-        )
 
     if files and messages:
         last_msg = messages[-1]
@@ -450,52 +584,15 @@ def handle_chat(body):
         messages[-1] = dict(messages[-1])
         messages[-1]['content'] = combined_content
 
-    api_messages = [{"role": "system", "content": system_prompt}]
+    system_prompt = _build_system_prompt(service, files, paid)
+
+    chat_messages = []
     for msg in messages[-10:]:
-        api_messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
+        chat_messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
 
-    api_key = os.environ.get('QWEN_API_KEY', '')
-    if not api_key:
-        return err(500, 'API key not configured')
-
-    payload = json.dumps({
-        "model": "qwen/qwen3-235b-a22b",
-        "messages": api_messages,
-        "max_tokens": 1024,
-        "temperature": 0.7,
-    }).encode('utf-8')
-
-    req = urllib.request.Request(
-        "https://openrouter.ai/api/v1/chat/completions",
-        data=payload,
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-    )
-
-    try:
-        with urllib.request.urlopen(req, timeout=55) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
-    except urllib.error.HTTPError as e:
-        error_body = ''
-        try:
-            error_body = e.read().decode('utf-8') if e.fp else ''
-        except Exception:
-            pass
-        print(f'AI HTTPError {e.code}: {error_body[:500]}')
-        if e.code == 401:
-            return err(502, 'Ключ AI-сервиса недействителен. Обратитесь к администратору.')
-        return err(502, f'AI временно недоступен (код {e.code}). Попробуйте через минуту.')
-    except urllib.error.URLError as e:
-        print(f'AI URLError: {e.reason}')
-        return err(502, 'Не удалось подключиться к AI. Попробуйте через минуту.')
-    except Exception as e:
-        print(f'AI Exception: {type(e).__name__}: {str(e)[:300]}')
-        return err(502, 'Ошибка при обращении к AI. Попробуйте через минуту.')
-
-    reply = data.get('choices', [{}])[0].get('message', {}).get('content', 'Не удалось получить ответ.')
-    if reply.startswith('<think>'):
-        think_end = reply.find('</think>')
-        if think_end != -1:
-            reply = reply[think_end + len('</think>'):].strip()
+    reply, error = _call_gemini(system_prompt, chat_messages)
+    if error:
+        return err(502, error)
 
     return ok({'reply': reply})
 

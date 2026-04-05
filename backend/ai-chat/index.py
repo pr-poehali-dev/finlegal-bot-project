@@ -493,31 +493,26 @@ def _build_system_prompt(service, files, paid):
 
 
 def _call_gemini(system_prompt, messages):
-    """Вызвать Google Gemini 2.5 Flash Lite API"""
-    api_key = os.environ.get('GEMINI_API_KEY', '')
+    """Вызвать Gemini 2.5 Flash Lite через OpenRouter"""
+    api_key = os.environ.get('QWEN_API_KEY', '')
     if not api_key:
         return None, 'API key not configured'
 
-    contents = []
+    api_messages = [{"role": "system", "content": system_prompt}]
     for msg in messages:
-        role = 'user' if msg.get('role', 'user') == 'user' else 'model'
-        contents.append({"role": role, "parts": [{"text": msg.get("content", "")}]})
+        api_messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
 
     payload = json.dumps({
-        "system_instruction": {"parts": [{"text": system_prompt}]},
-        "contents": contents,
-        "generationConfig": {
-            "maxOutputTokens": 2048,
-            "temperature": 0.7,
-        },
+        "model": "google/gemini-2.5-flash-lite",
+        "messages": api_messages,
+        "max_tokens": 2048,
+        "temperature": 0.7,
     }).encode('utf-8')
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={api_key}"
-
     req = urllib.request.Request(
-        url,
+        "https://openrouter.ai/api/v1/chat/completions",
         data=payload,
-        headers={"Content-Type": "application/json"},
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
     )
 
     try:
@@ -530,7 +525,7 @@ def _call_gemini(system_prompt, messages):
         except Exception:
             pass
         print(f'Gemini HTTPError {e.code}: {error_body[:500]}')
-        if e.code in (401, 403):
+        if e.code == 401:
             return None, 'Ключ AI-сервиса недействителен. Обратитесь к администратору.'
         return None, f'AI временно недоступен (код {e.code}). Попробуйте через минуту.'
     except urllib.error.URLError as e:
@@ -540,16 +535,11 @@ def _call_gemini(system_prompt, messages):
         print(f'Gemini Exception: {type(e).__name__}: {str(e)[:300]}')
         return None, 'Ошибка при обращении к AI. Попробуйте через минуту.'
 
-    candidates = data.get('candidates', [])
-    if not candidates:
+    reply = data.get('choices', [{}])[0].get('message', {}).get('content', '')
+    if not reply:
         return None, 'AI не вернул ответ. Попробуйте переформулировать вопрос.'
 
-    parts = candidates[0].get('content', {}).get('parts', [])
-    reply = ''.join(p.get('text', '') for p in parts).strip()
-    if not reply:
-        return None, 'Не удалось получить ответ от AI.'
-
-    return reply, None
+    return reply.strip(), None
 
 
 def handle_chat(body):

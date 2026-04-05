@@ -120,6 +120,7 @@ const Chat = () => {
     const fileContents = await Promise.all(attachedFiles.map((f) => readFileContent(f)));
 
     setAttachedFiles([]);
+    if (fileInputRef.current) fileInputRef.current.value = "";
     setIsTyping(true);
 
     const chatHistory = messages

@@ -23,18 +23,27 @@ const PAYMENT_URL = (func2url as Record<string, string>)["create-payment"] || ""
 
 const PRICE_REGEX = /(?:^|[^\d])(\d[\d\s.,]*)[\s]*₽/;
 
+const MAX_FILE_SIZE = 512 * 1024;
+
+const isTextFile = (file: File): boolean => {
+  const textExts = [".txt", ".md", ".csv", ".json", ".xml", ".html", ".htm", ".css", ".js", ".ts", ".py", ".sql", ".log", ".ini", ".cfg", ".yaml", ".yml", ".toml", ".env", ".rtf"];
+  const name = file.name.toLowerCase();
+  return file.type.startsWith("text/") || textExts.some((ext) => name.endsWith(ext));
+};
+
 const readFileContent = (file: File): Promise<string> => {
   return new Promise((resolve) => {
-    const reader = new FileReader();
-    if (file.type === "text/plain" || file.name.endsWith(".txt") || file.name.endsWith(".md")) {
+    if (file.size > MAX_FILE_SIZE) {
+      resolve(`[Файл "${file.name}" слишком большой: ${(file.size / 1024).toFixed(0)} КБ, максимум 512 КБ. Загрузите файл меньшего размера.]`);
+      return;
+    }
+    if (isTextFile(file)) {
+      const reader = new FileReader();
       reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => resolve(`[Не удалось прочитать файл "${file.name}"]`);
       reader.readAsText(file);
     } else {
-      reader.onload = () => {
-        const base64 = (reader.result as string).split(",")[1] || "";
-        resolve(`[base64:${file.name}]${base64}`);
-      };
-      reader.readAsDataURL(file);
+      resolve(`[Файл "${file.name}" (${(file.size / 1024).toFixed(0)} КБ) — бинарный формат (${file.type || "unknown"}). Поддерживаются только текстовые файлы: .txt, .md, .csv, .json, .xml, .html и др.]`);
     }
   });
 };

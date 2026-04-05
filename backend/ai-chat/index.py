@@ -392,20 +392,20 @@ def handle_chat(body):
             "Выяви риски, проблемы, дай рекомендации."
         )
 
-    # Build the last user message with file contents if present
     if files and messages:
         last_msg = messages[-1]
         file_block = ""
         for f in files:
             fname = f.get('name', 'file')
             fcontent = f.get('content', '')
+            if len(fcontent) > 50000:
+                fcontent = fcontent[:50000] + '\n... (текст обрезан, файл слишком большой)'
             file_block += f'[Содержимое файла "{fname}":]\n{fcontent}\n\n'
 
         user_text = last_msg.get('content', '')
         combined_content = file_block + f"[Пользователь спрашивает:]\n{user_text}"
 
-        # Replace the last message content with combined version
-        messages = list(messages)  # copy
+        messages = list(messages)
         messages[-1] = dict(messages[-1])
         messages[-1]['content'] = combined_content
 

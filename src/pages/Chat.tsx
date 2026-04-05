@@ -80,7 +80,7 @@ const Chat = () => {
       role: "bot",
       text: selectedService
         ? `Вы выбрали услугу: «${selectedService}». Загрузите документы или опишите задачу — я приступлю к работе.`
-        : "Здравствуйте! Я ЮрБот — ваш AI-помощник на базе Gemini. Выберите услугу из каталога или опишите задачу, и я помогу.",
+        : "Здравствуйте! Я ЮрБот — ваш финансово-юридический помощник. Выберите услугу из каталога или опишите задачу, и я помогу.",
       time: now(),
     },
   ]);
@@ -90,6 +90,7 @@ const Chat = () => {
   const [isPaid, setIsPaid] = useState(false);
   const [currentOrderId, setCurrentOrderId] = useState<number | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
+  const [lastFileContents, setLastFileContents] = useState<Array<{name: string; content: string; encoding?: string}>>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -118,6 +119,9 @@ const Chat = () => {
     setInput("");
 
     const fileContents = await Promise.all(attachedFiles.map((f) => readFileContent(f)));
+    if (fileContents.length > 0) {
+      setLastFileContents(fileContents);
+    }
 
     setAttachedFiles([]);
     if (fileInputRef.current) fileInputRef.current.value = "";
@@ -254,6 +258,17 @@ const Chat = () => {
     }
   };
 
+  const autoDownloadResult = (text: string, service: string) => {
+    const filename = `ЮрБот_${(service || 'анализ').replace(/\s+/g, '_')}_${new Date().toISOString().slice(0,10)}.txt`;
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const handleConfirmPayment = async () => {
     if (currentOrderId) {
       try {
@@ -272,10 +287,57 @@ const Chat = () => {
       {
         id: Date.now().toString(),
         role: "bot",
-        text: "Оплата подтверждена! Теперь я проведу полный анализ ваших документов. Отправьте файлы или задайте вопрос.",
+        text: "Оплата подтверждена! Выполняю полный анализ ваших документов...",
         time: now(),
       },
     ]);
+
+    // Auto-analysis after payment confirmation
+    setIsTyping(true);
+    try {
+      const resp = await fetch(AI_CHAT_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [{ role: "user", content: "Выполни полный анализ загруженных документов" }],
+          service: selectedService || "",
+          files: lastFileContents.length > 0 ? lastFileContents : undefined,
+          paid: true,
+        }),
+      });
+
+      const data = await resp.json();
+      if (!resp.ok) {
+        throw new Error(data.error || "Ошибка сервера");
+      }
+
+      const reply = data.reply;
+
+      autoDownloadResult(reply, selectedService || "");
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: (Date.now() + 1).toString(),
+          role: "bot",
+          text: reply + "\n\nРезультат сохранён в файл.",
+          time: now(),
+        },
+      ]);
+    } catch (e) {
+      const errorText = e instanceof Error ? e.message : "Неизвестная ошибка";
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: (Date.now() + 1).toString(),
+          role: "bot",
+          text: `Ошибка при автоматическом анализе: ${errorText}. Попробуйте отправить запрос вручную.`,
+          time: now(),
+        },
+      ]);
+    } finally {
+      setIsTyping(false);
+    }
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {

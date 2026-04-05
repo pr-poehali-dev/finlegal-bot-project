@@ -550,135 +550,53 @@ def _build_system_prompt(service, files, paid):
     return base
 
 
-DDG_HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-    'Accept': '*/*',
-    'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
-    'Referer': 'https://duckduckgo.com/',
-    'Origin': 'https://duckduckgo.com',
-    'Sec-Fetch-Dest': 'empty',
-    'Sec-Fetch-Mode': 'cors',
-    'Sec-Fetch-Site': 'same-origin',
-    'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive',
-}
-
-
-def _get_ddg_vqd():
-    headers = dict(DDG_HEADERS)
-    headers['x-vqd-accept'] = '1'
-    req = urllib.request.Request('https://duckduckgo.com/duckchat/v1/status', headers=headers)
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        vqd = resp.headers.get('x-vqd-4', '')
-    print(f'DDG VQD token: {vqd[:20]}...' if vqd else 'DDG VQD: empty!')
-    return vqd
-
-
-def _call_ddg_chat(system_prompt, messages, model='gpt-4o-mini'):
-    vqd = _get_ddg_vqd()
-    if not vqd:
-        print('DDG: no VQD token')
-        return None
-
-    ddg_messages = []
-    sys_content = system_prompt.strip()
-    if len(sys_content) > 8000:
-        sys_content = sys_content[:8000]
-
-    ddg_messages.append({"role": "user", "content": sys_content})
-    ddg_messages.append({"role": "assistant", "content": "Понял, я готов работать. Чем могу помочь?"})
+def _call_pollinations(system_prompt, messages, model='openai'):
+    """Call Pollinations.ai OpenAI-compatible API. Returns response text or None."""
+    api_messages = [{"role": "system", "content": system_prompt}]
 
     for msg in messages:
         role = msg.get("role", "user")
         content = msg.get("content", "")
         if role == "assistant":
-            ddg_messages.append({"role": "assistant", "content": content})
+            api_messages.append({"role": "assistant", "content": content})
         else:
-            ddg_messages.append({"role": "user", "content": content})
-
-    payload = json.dumps({"model": model, "messages": ddg_messages}).encode('utf-8')
-
-    headers = dict(DDG_HEADERS)
-    headers['Content-Type'] = 'application/json'
-    headers['Accept'] = 'text/event-stream'
-    headers['x-vqd-4'] = vqd
-
-    req = urllib.request.Request('https://duckduckgo.com/duckchat/v1/chat', data=payload, headers=headers)
-
-    with urllib.request.urlopen(req, timeout=55) as resp:
-        raw = resp.read().decode('utf-8')
-
-    result_parts = []
-    for line in raw.split('\n'):
-        if not line.startswith('data: '):
-            continue
-        data_str = line[6:].strip()
-        if data_str == '[DONE]':
-            break
-        try:
-            obj = json.loads(data_str)
-            chunk = obj.get('message', '')
-            if chunk:
-                result_parts.append(chunk)
-        except (json.JSONDecodeError, KeyError):
-            continue
-
-    result = ''.join(result_parts).strip()
-    print(f'DDG {model}: got {len(result)} chars')
-    return result if result else None
-
-
-GEMINI_MODELS = [
-    'gemini-2.5-flash-lite',
-    'gemini-2.5-flash',
-    'gemini-2.0-flash',
-]
-
-
-def _call_gemini_free(system_prompt, messages, model=None):
-    api_key = os.environ.get('GEMINI_API_KEY', '')
-    if not api_key:
-        print('Gemini: no API key')
-        return None
-
-    model = model or GEMINI_MODELS[0]
-
-    contents = []
-    for msg in messages:
-        role = msg.get("role", "user")
-        if role == "assistant":
-            role = "model"
-        contents.append({"role": role, "parts": [{"text": msg.get("content", "")}]})
+            api_messages.append({"role": "user", "content": content})
 
     payload = json.dumps({
-        "contents": contents,
-        "systemInstruction": {"parts": [{"text": system_prompt}]},
-        "generationConfig": {"maxOutputTokens": 4096, "temperature": 0.7},
+        "model": model,
+        "messages": api_messages,
+        "temperature": 0.7,
+        "max_tokens": 4096,
     }).encode('utf-8')
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-    print(f'Gemini: calling {model}...')
-    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+    print(f'Pollinations: calling model={model}, messages={len(api_messages)}...')
+
+    req = urllib.request.Request(
+        'https://text.pollinations.ai/openai',
+        data=payload,
+        headers={'Content-Type': 'application/json'},
+    )
 
     with urllib.request.urlopen(req, timeout=55) as resp:
         data = json.loads(resp.read().decode('utf-8'))
 
-    candidates = data.get('candidates', [])
-    if not candidates:
-        print(f'Gemini {model}: no candidates')
+    choices = data.get('choices', [])
+    if not choices:
+        print(f'Pollinations {model}: no choices in response')
         return None
-    parts = candidates[0].get('content', {}).get('parts', [])
-    reply = ''.join(p.get('text', '') for p in parts)
-    print(f'Gemini {model}: got {len(reply)} chars')
-    return reply.strip() if reply else None
+
+    reply = choices[0].get('message', {}).get('content', '')
+    reply = reply.strip()
+    print(f'Pollinations {model}: got {len(reply)} chars')
+    return reply if reply else None
 
 
 def _call_ai(system_prompt, messages):
-    import time
+    models = ['openai', 'mistral', 'llama']
 
-    for model in GEMINI_MODELS:
+    for model in models:
         try:
-            result = _call_gemini_free(system_prompt, messages, model)
+            result = _call_pollinations(system_prompt, messages, model)
             if result:
                 return result, None
         except urllib.error.HTTPError as e:
@@ -687,24 +605,9 @@ def _call_ai(system_prompt, messages):
                 body = e.read().decode('utf-8')[:300] if e.fp else ''
             except Exception:
                 pass
-            print(f'Gemini {model} HTTPError {e.code}: {body}')
-            if e.code == 429:
-                time.sleep(1)
-                continue
-            if e.code in (400, 404):
-                continue
+            print(f'Pollinations {model} HTTPError {e.code}: {body}')
         except Exception as e:
-            print(f'Gemini {model} error: {type(e).__name__}: {str(e)[:200]}')
-            continue
-
-    ddg_models = ['gpt-4o-mini', 'claude-3-haiku-20240307']
-    for model in ddg_models:
-        try:
-            result = _call_ddg_chat(system_prompt, messages, model)
-            if result:
-                return result, None
-        except Exception as e:
-            print(f'DDG {model} error: {type(e).__name__}: {str(e)[:200]}')
+            print(f'Pollinations {model} error: {type(e).__name__}: {str(e)[:200]}')
 
     return None, 'AI временно недоступен. Попробуйте через минуту.'
 

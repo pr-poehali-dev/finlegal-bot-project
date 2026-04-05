@@ -291,6 +291,7 @@ def handle_create_order(body):
     phone = (body.get('phone') or '').strip()
     service_name = (body.get('service_name') or '').strip()
     amount = body.get('amount', 0)
+    files_data = body.get('files_data', None)
 
     if not service_name or not amount:
         return err(400, 'Укажите название услуги и сумму')
@@ -301,8 +302,8 @@ def handle_create_order(body):
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO orders (user_phone, service_name, amount, status, payment_label) VALUES (%s, %s, %s, %s, %s) RETURNING id",
-                (phone, service_name, float(amount), 'pending', payment_label),
+                "INSERT INTO orders (user_phone, service_name, amount, status, payment_label, files_data) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+                (phone, service_name, float(amount), 'pending', payment_label, files_data),
             )
             order_id = cur.fetchone()[0]
         conn.commit()
@@ -321,8 +322,28 @@ def handle_confirm_payment(body):
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE orders SET status = 'paid', paid_at = NOW() WHERE id = %s",
+                "UPDATE orders SET status = 'paid', paid_at = NOW() WHERE id = %s AND status = 'pending'",
                 (int(order_id),),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return ok({'ok': True})
+
+
+def handle_save_result(body):
+    order_id = body.get('order_id')
+    result = body.get('result', '')
+    if not order_id:
+        return err(400, 'Укажите order_id')
+
+    conn = get_db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE orders SET result = %s WHERE id = %s",
+                (result[:100000], int(order_id)),
             )
         conn.commit()
     finally:
@@ -785,6 +806,9 @@ def handler(event: dict, context) -> dict:
 
     if action == 'check_order':
         return handle_check_order(body)
+
+    if action == 'save_result':
+        return handle_save_result(body)
 
     if action == 'admin_auth':
         if check_admin(body):

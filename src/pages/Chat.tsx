@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
 import Icon from "@/components/ui/icon";
 import func2url from "../../backend/func2url.json";
@@ -14,6 +14,19 @@ interface Message {
   paymentDescription?: string;
   showConfirmPayment?: boolean;
 }
+
+interface SavedSession {
+  messages: Message[];
+  service: string;
+  orderId: number | null;
+  isPaid: boolean;
+  fileContents: Array<{ name: string; content: string; encoding?: string }>;
+  pendingPayment: boolean;
+  timestamp: number;
+}
+
+const SESSION_KEY = "jurbot_chat_session";
+const SESSION_TTL = 3600000;
 
 const now = () =>
   new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
@@ -70,33 +83,189 @@ const readFileContent = (file: File): Promise<{ name: string; content: string; e
   });
 };
 
+const saveSession = (data: Partial<SavedSession> & { messages: Message[] }) => {
+  try {
+    const existing = loadSession();
+    const session: SavedSession = {
+      messages: data.messages,
+      service: data.service ?? existing?.service ?? "",
+      orderId: data.orderId ?? existing?.orderId ?? null,
+      isPaid: data.isPaid ?? existing?.isPaid ?? false,
+      fileContents: data.fileContents ?? existing?.fileContents ?? [],
+      pendingPayment: data.pendingPayment ?? existing?.pendingPayment ?? false,
+      timestamp: Date.now(),
+    };
+    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  } catch { /* quota exceeded */ }
+};
+
+const loadSession = (): SavedSession | null => {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const session: SavedSession = JSON.parse(raw);
+    if (Date.now() - session.timestamp > SESSION_TTL) {
+      localStorage.removeItem(SESSION_KEY);
+      return null;
+    }
+    return session;
+  } catch {
+    return null;
+  }
+};
+
+const clearSession = () => {
+  localStorage.removeItem(SESSION_KEY);
+};
+
 const Chat = () => {
   const [searchParams] = useSearchParams();
   const selectedService = searchParams.get("service");
 
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: "1",
-      role: "bot",
-      text: selectedService
-        ? `Вы выбрали услугу: «${selectedService}». Загрузите документы или опишите задачу — я приступлю к работе.`
-        : "Здравствуйте! Я ЮрБот — ваш финансово-юридический помощник. Выберите услугу из каталога или опишите задачу, и я помогу.",
-      time: now(),
-    },
-  ]);
+  const saved = loadSession();
+  const isReturningFromPayment = saved?.pendingPayment && saved?.fileContents?.length > 0;
+
+  const [messages, setMessages] = useState<Message[]>(() => {
+    if (saved && saved.messages.length > 1) {
+      return saved.messages;
+    }
+    return [
+      {
+        id: "1",
+        role: "bot",
+        text: selectedService
+          ? `Вы выбрали услугу: «${selectedService}». Загрузите документы или опишите задачу — я приступлю к работе.`
+          : "Здравствуйте! Я ЮрБот — ваш финансово-юридический помощник. Выберите услугу из каталога или опишите задачу, и я помогу.",
+        time: now(),
+      },
+    ];
+  });
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [isPaying, setIsPaying] = useState(false);
-  const [isPaid, setIsPaid] = useState(false);
-  const [currentOrderId, setCurrentOrderId] = useState<number | null>(null);
+  const [isPaid, setIsPaid] = useState(saved?.isPaid ?? false);
+  const [currentOrderId, setCurrentOrderId] = useState<number | null>(saved?.orderId ?? null);
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
-  const [lastFileContents, setLastFileContents] = useState<Array<{name: string; content: string; encoding?: string}>>([]);
+  const [lastFileContents, setLastFileContents] = useState<Array<{ name: string; content: string; encoding?: string }>>(saved?.fileContents ?? []);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const returnHandledRef = useRef(false);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  useEffect(() => {
+    saveSession({
+      messages,
+      service: selectedService || "",
+      orderId: currentOrderId,
+      isPaid,
+      fileContents: lastFileContents,
+      pendingPayment: false,
+    });
+  }, [messages, currentOrderId, isPaid, lastFileContents, selectedService]);
+
+  const autoDownloadResult = useCallback((text: string, service: string) => {
+    const filename = `ЮрБот_${(service || "анализ").replace(/\s+/g, "_")}_${new Date().toISOString().slice(0, 10)}.txt`;
+    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, []);
+
+  const runPaidAnalysis = useCallback(async (files: Array<{ name: string; content: string; encoding?: string }>, service: string, orderId: number | null) => {
+    if (orderId) {
+      try {
+        await fetch(AI_CHAT_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "confirm_payment", order_id: orderId }),
+        });
+      } catch { /* ignore */ }
+    }
+
+    setIsTyping(true);
+    try {
+      const resp = await fetch(AI_CHAT_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "chat",
+          messages: [{ role: "user", content: "Выполни полный анализ загруженных документов" }],
+          service: service,
+          files: files.length > 0 ? files : undefined,
+          paid: true,
+        }),
+      });
+
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || "Ошибка сервера");
+
+      const reply = data.reply;
+
+      if (orderId) {
+        try {
+          await fetch(AI_CHAT_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "save_result", order_id: orderId, result: reply }),
+          });
+        } catch { /* ignore */ }
+      }
+
+      autoDownloadResult(reply, service);
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: (Date.now() + 1).toString(),
+          role: "bot",
+          text: reply + "\n\n✅ Результат сохранён в файл.",
+          time: now(),
+        },
+      ]);
+
+      setIsPaid(true);
+    } catch (e) {
+      const errorText = e instanceof Error ? e.message : "Неизвестная ошибка";
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: (Date.now() + 1).toString(),
+          role: "bot",
+          text: `Ошибка при анализе: ${errorText}. Попробуйте отправить файлы ещё раз.`,
+          time: now(),
+        },
+      ]);
+    } finally {
+      setIsTyping(false);
+    }
+  }, [autoDownloadResult]);
+
+  useEffect(() => {
+    if (isReturningFromPayment && !returnHandledRef.current) {
+      returnHandledRef.current = true;
+      const service = saved!.service || selectedService || "";
+      const files = saved!.fileContents;
+      const orderId = saved!.orderId;
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now().toString(),
+          role: "bot",
+          text: "Оплата подтверждена! Выполняю полный анализ ваших документов...",
+          time: now(),
+        },
+      ]);
+
+      runPaidAnalysis(files, service, orderId);
+    }
+  }, [isReturningFromPayment, saved, selectedService, runPaidAnalysis]);
 
   const handleSend = async () => {
     if (!input.trim() && attachedFiles.length === 0) return;
@@ -144,6 +313,7 @@ const Chat = () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          action: "chat",
           messages: chatHistory,
           service: selectedService || "",
           files: fileContents.length > 0 ? fileContents : undefined,
@@ -162,7 +332,7 @@ const Chat = () => {
       let paymentAmount: number | undefined;
       let paymentDescription: string | undefined;
 
-      if (priceMatch) {
+      if (priceMatch && !isPaid) {
         const cleaned = priceMatch[1].replace(/[\s.,]/g, "");
         const parsed = parseInt(cleaned, 10);
         if (!isNaN(parsed) && parsed >= 100 && parsed <= 10_000_000) {
@@ -209,6 +379,7 @@ const Chat = () => {
           phone: getStoredUser()?.phone || "anonymous",
           service_name: description,
           amount,
+          files_data: lastFileContents.length > 0 ? JSON.stringify(lastFileContents) : undefined,
         }),
       });
       const orderData = await orderResp.json();
@@ -216,6 +387,15 @@ const Chat = () => {
         throw new Error(orderData.error || "Не удалось создать заказ");
       }
       setCurrentOrderId(orderData.order_id);
+
+      saveSession({
+        messages: [...messages],
+        service: selectedService || "",
+        orderId: orderData.order_id,
+        isPaid: false,
+        fileContents: lastFileContents,
+        pendingPayment: true,
+      });
 
       const resp = await fetch(PAYMENT_URL, {
         method: "POST",
@@ -231,17 +411,18 @@ const Chat = () => {
       if (!resp.ok) throw new Error(data.error || "Ошибка создания платежа");
 
       if (data.payment_url) {
-        window.open(data.payment_url, "_blank");
         setMessages((prev) => [
           ...prev,
           {
             id: Date.now().toString(),
             role: "bot",
-            text: `Открыта страница оплаты.\n\nСумма: ${amount.toLocaleString("ru-RU")} ₽\nДоступны: банковская карта, СБП\n\nПосле оплаты нажмите кнопку «Я оплатил(а)» ниже.`,
+            text: `Переходим к оплате.\n\nСумма: ${amount.toLocaleString("ru-RU")} ₽\nДоступны: банковская карта, СБП\n\nПосле оплаты вы будете перенаправлены обратно — анализ начнётся автоматически.\n\nЕсли страница не перезагрузилась — нажмите кнопку «Я оплатил(а)» ниже.`,
             time: now(),
             showConfirmPayment: true,
           },
         ]);
+
+        window.location.href = data.payment_url;
       }
     } catch (e) {
       setMessages((prev) => [
@@ -258,30 +439,7 @@ const Chat = () => {
     }
   };
 
-  const autoDownloadResult = (text: string, service: string) => {
-    const filename = `ЮрБот_${(service || 'анализ').replace(/\s+/g, '_')}_${new Date().toISOString().slice(0,10)}.txt`;
-    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
   const handleConfirmPayment = async () => {
-    if (currentOrderId) {
-      try {
-        await fetch(AI_CHAT_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "confirm_payment", order_id: currentOrderId }),
-        });
-      } catch {
-        // silently ignore confirmation errors
-      }
-    }
-    setIsPaid(true);
     setMessages((prev) => [
       ...prev,
       {
@@ -292,52 +450,11 @@ const Chat = () => {
       },
     ]);
 
-    // Auto-analysis after payment confirmation
-    setIsTyping(true);
-    try {
-      const resp = await fetch(AI_CHAT_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: [{ role: "user", content: "Выполни полный анализ загруженных документов" }],
-          service: selectedService || "",
-          files: lastFileContents.length > 0 ? lastFileContents : undefined,
-          paid: true,
-        }),
-      });
+    const service = selectedService || saved?.service || "";
+    const files = lastFileContents.length > 0 ? lastFileContents : (saved?.fileContents ?? []);
+    const orderId = currentOrderId || saved?.orderId || null;
 
-      const data = await resp.json();
-      if (!resp.ok) {
-        throw new Error(data.error || "Ошибка сервера");
-      }
-
-      const reply = data.reply;
-
-      autoDownloadResult(reply, selectedService || "");
-
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: (Date.now() + 1).toString(),
-          role: "bot",
-          text: reply + "\n\nРезультат сохранён в файл.",
-          time: now(),
-        },
-      ]);
-    } catch (e) {
-      const errorText = e instanceof Error ? e.message : "Неизвестная ошибка";
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: (Date.now() + 1).toString(),
-          role: "bot",
-          text: `Ошибка при автоматическом анализе: ${errorText}. Попробуйте отправить запрос вручную.`,
-          time: now(),
-        },
-      ]);
-    } finally {
-      setIsTyping(false);
-    }
+    await runPaidAnalysis(files, service, orderId);
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -387,16 +504,28 @@ const Chat = () => {
     URL.revokeObjectURL(url);
   };
 
+  const handleNewChat = () => {
+    clearSession();
+    window.location.reload();
+  };
+
   return (
     <div className="max-w-4xl mx-auto flex flex-col h-[calc(100vh-7rem)] animate-fade-in">
       <div className="flex items-center justify-between mb-4">
         <div>
           <h1 className="text-lg font-semibold text-foreground">Чат-бот</h1>
-          {selectedService && (
-            <p className="text-xs text-primary">Услуга: {selectedService}</p>
+          {(selectedService || saved?.service) && (
+            <p className="text-xs text-primary">Услуга: {selectedService || saved?.service}</p>
           )}
         </div>
         <div className="flex gap-2">
+          <button
+            onClick={handleNewChat}
+            className="text-xs px-3 py-1.5 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors flex items-center gap-1"
+          >
+            <Icon name="Plus" size={12} />
+            Новый чат
+          </button>
           <button
             onClick={() => handleExport(getPreferredFormat())}
             className="text-xs px-3 py-1.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors flex items-center gap-1"
@@ -447,7 +576,7 @@ const Chat = () => {
               <p className="text-sm whitespace-pre-wrap">{msg.text}</p>
               <span className="text-[10px] opacity-50 mt-1 block">{msg.time}</span>
 
-              {msg.paymentAmount && msg.paymentDescription && (
+              {msg.paymentAmount && msg.paymentDescription && !isPaid && (
                 <button
                   onClick={() => handlePayment(msg.paymentAmount!, msg.paymentDescription!)}
                   disabled={isPaying}
@@ -461,9 +590,9 @@ const Chat = () => {
               {msg.showConfirmPayment && !isPaid && (
                 <button
                   onClick={handleConfirmPayment}
-                  className="mt-2 bg-green-600 text-white px-4 py-2 rounded-lg text-xs hover:bg-green-700 transition-colors flex items-center gap-1"
+                  className="mt-2 w-full bg-green-600 text-white px-4 py-2.5 rounded-lg text-sm font-medium hover:bg-green-700 transition-colors flex items-center justify-center gap-2"
                 >
-                  <Icon name="CheckCircle" size={14} />
+                  <Icon name="CheckCircle" size={16} />
                   Я оплатил(а)
                 </button>
               )}

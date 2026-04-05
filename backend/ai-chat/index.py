@@ -493,26 +493,32 @@ def _build_system_prompt(service, files, paid):
 
 
 def _call_gemini(system_prompt, messages):
-    """Вызвать Gemini 2.5 Flash Lite через OpenRouter"""
-    api_key = os.environ.get('QWEN_API_KEY', '')
+    """Вызвать Gemini 2.0 Flash через Google AI Studio (бесплатно)"""
+    api_key = os.environ.get('GEMINI_API_KEY', '')
     if not api_key:
         return None, 'API key not configured'
 
-    api_messages = [{"role": "system", "content": system_prompt}]
+    contents = []
     for msg in messages:
-        api_messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
+        role = msg.get("role", "user")
+        if role == "assistant":
+            role = "model"
+        contents.append({"role": role, "parts": [{"text": msg.get("content", "")}]})
 
     payload = json.dumps({
-        "model": "google/gemini-2.5-flash-lite",
-        "messages": api_messages,
-        "max_tokens": 2048,
-        "temperature": 0.7,
+        "contents": contents,
+        "systemInstruction": {"parts": [{"text": system_prompt}]},
+        "generationConfig": {
+            "maxOutputTokens": 2048,
+            "temperature": 0.7,
+        },
     }).encode('utf-8')
 
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
     req = urllib.request.Request(
-        "https://openrouter.ai/api/v1/chat/completions",
+        url,
         data=payload,
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        headers={"Content-Type": "application/json"},
     )
 
     try:
@@ -525,8 +531,10 @@ def _call_gemini(system_prompt, messages):
         except Exception:
             pass
         print(f'Gemini HTTPError {e.code}: {error_body[:500]}')
-        if e.code == 401:
+        if e.code in (401, 403):
             return None, 'Ключ AI-сервиса недействителен. Обратитесь к администратору.'
+        if e.code == 429:
+            return None, 'Слишком много запросов. Подождите минуту и попробуйте снова.'
         return None, f'AI временно недоступен (код {e.code}). Попробуйте через минуту.'
     except urllib.error.URLError as e:
         print(f'Gemini URLError: {e.reason}')
@@ -535,7 +543,12 @@ def _call_gemini(system_prompt, messages):
         print(f'Gemini Exception: {type(e).__name__}: {str(e)[:300]}')
         return None, 'Ошибка при обращении к AI. Попробуйте через минуту.'
 
-    reply = data.get('choices', [{}])[0].get('message', {}).get('content', '')
+    candidates = data.get('candidates', [])
+    if not candidates:
+        return None, 'AI не вернул ответ. Попробуйте переформулировать вопрос.'
+
+    parts = candidates[0].get('content', {}).get('parts', [])
+    reply = ''.join(p.get('text', '') for p in parts)
     if not reply:
         return None, 'AI не вернул ответ. Попробуйте переформулировать вопрос.'
 
@@ -543,7 +556,7 @@ def _call_gemini(system_prompt, messages):
 
 
 def handle_chat(body):
-    """Чат с AI-ассистентом ЮрБот на базе Gemini 2.5 Flash Lite"""
+    """Чат с AI-ассистентом ЮрБот на базе Gemini 2.0 Flash (Google AI)"""
     messages = body.get('messages', [])
     service = body.get('service', '')
     files = body.get('files', [])

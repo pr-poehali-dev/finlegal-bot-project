@@ -416,8 +416,6 @@ def _extract_text_from_binary(fname, b64_content):
         return f'[Ошибка при чтении файла: {str(e)[:200]}]'
 
 
-import re
-
 SERVICE_PRICES = {
     'Экспресс-проверка договора': 1000,
     'Полный анализ договора': 3000,
@@ -433,207 +431,260 @@ SERVICE_PRICES = {
     'Полный комплект под проект': 50000,
 }
 
-
-def _count_pages(text):
-    lines = text.strip().split('\n')
-    chars = len(text)
-    pages = max(1, round(chars / 2000))
-    return pages, len(lines), chars
-
-
-def _detect_doc_type(text):
-    t = text.lower()
-    patterns = {
-        'договор': ['договор', 'контракт', 'соглашение', 'стороны именуемые', 'предмет договора'],
-        'доверенность': ['доверенность', 'уполномочивает', 'настоящей доверенностью'],
-        'исковое заявление': ['исковое заявление', 'истец', 'ответчик', 'прошу суд'],
-        'претензия': ['претензия', 'требую', 'досудебн'],
-        'акт': ['акт приёма', 'акт приема', 'акт выполненных', 'акт сверки'],
-        'устав': ['устав', 'учредитель', 'уставный капитал'],
-        'протокол': ['протокол', 'собрание', 'слушали', 'постановили'],
-        'приказ': ['приказ', 'приказываю', 'основание'],
-        'заявление': ['заявление', 'прошу', 'заявитель'],
-        'счёт': ['счёт', 'счет-фактура', 'оплата', 'итого к оплате'],
-        'отчёт': ['отчёт', 'отчет', 'показатели', 'результаты деятельности'],
-        'финансовый документ': ['баланс', 'прибыль', 'убыток', 'актив', 'пассив', 'страхов', 'премии', 'выплаты', 'резерв'],
-        'трудовой договор': ['трудовой договор', 'работник', 'работодатель', 'заработная плата'],
-        'аренда': ['аренда', 'арендодатель', 'арендатор', 'арендная плата'],
-        'купля-продажа': ['купли-продажи', 'купля-продажа', 'покупатель', 'продавец'],
-        'страхование': ['страхов', 'полис', 'страхователь', 'выгодоприобретатель', 'страховой случай'],
-        'практическая работа': ['практическ', 'задание', 'вариант', 'расчет', 'расчёт', 'задач'],
-    }
-    found = {}
-    for dtype, keywords in patterns.items():
-        count = sum(1 for kw in keywords if kw in t)
-        if count > 0:
-            found[dtype] = count
-    if not found:
-        return 'документ'
-    return max(found, key=found.get)
-
-
-def _extract_key_sections(text):
-    sections = []
-    lines = text.split('\n')
-    for line in lines:
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if len(stripped) < 100 and (stripped.isupper() or stripped.endswith(':') or re.match(r'^(Раздел|Глава|Статья|Пункт|\d+\.)\s', stripped)):
-            sections.append(stripped)
-    return sections[:20]
-
-
-def _extract_numbers(text):
-    money_patterns = re.findall(r'(\d[\d\s.,]*)\s*(?:руб|₽|рубл|тыс|млн|р\.)', text)
-    numbers = []
-    for m in money_patterns:
-        cleaned = m.replace(' ', '').replace(',', '.').replace('\xa0', '')
-        try:
-            val = float(cleaned)
-            if val > 0:
-                numbers.append(val)
-        except ValueError:
-            pass
-    return numbers[:10]
-
-
-def _extract_parties(text):
-    parties = []
-    patterns = [
-        r'(?:именуем\w+|далее)\s*[«"—–-]\s*([^»"—–\n]{2,60})',
-        r'(?:ООО|ОАО|ЗАО|АО|ИП|ПАО)\s*[«"]([^»"]{2,60})',
-    ]
-    for p in patterns:
-        found = re.findall(p, text)
-        parties.extend(found)
-    return list(set(parties))[:6]
+SERVICE_PROMPTS = {
+    'Экспресс-проверка договора': (
+        "Услуга: Экспресс-проверка договора.\n"
+        "Задача: быстро проверить договор, выявить явные риски, кабальные условия, "
+        "несоответствия законодательству РФ. Дай краткое заключение с пометками «⚠️ Риск» для проблемных пунктов."
+    ),
+    'Полный анализ договора': (
+        "Услуга: Полный анализ договора.\n"
+        "Задача: детальный постатейный анализ. По каждому разделу: описание, риски, рекомендации по исправлению. "
+        "Отметь соответствие ГК РФ, ЗоЗПП и другим применимым законам. Дай итоговое заключение."
+    ),
+    'Анализ сложного контракта': (
+        "Услуга: Анализ сложного контракта.\n"
+        "Задача: глубокий экспертный анализ сложного контракта (корпоративные, международные, инвестиционные). "
+        "Анализируй перекрёстные ссылки, приложения, условия расторжения, форс-мажор, арбитражные оговорки. "
+        "Дай развёрнутое экспертное заключение."
+    ),
+    'Комплексная экспертиза пакета': (
+        "Услуга: Комплексная экспертиза пакета документов.\n"
+        "Задача: полная экспертиза пакета связанных документов. Проверь взаимосвязи, противоречия между документами, "
+        "юридическую целостность пакета. Дай сводный отчёт и рекомендации."
+    ),
+    'Устная консультация': (
+        "Услуга: Устная консультация.\n"
+        "Задача: дай чёткий, понятный ответ на вопрос пользователя. "
+        "Ссылайся на конкретные статьи законов РФ. Объясняй простым языком."
+    ),
+    'Письменное заключение': (
+        "Услуга: Письменное заключение.\n"
+        "Задача: подготовь структурированное письменное заключение. Формат: "
+        "1) Суть вопроса, 2) Применимые нормы, 3) Анализ, 4) Выводы и рекомендации. "
+        "Пиши в формальном стиле, пригодном для официального использования."
+    ),
+    'Правовой анализ ситуации': (
+        "Услуга: Правовой анализ ситуации.\n"
+        "Задача: комплексный анализ правовой ситуации. Рассмотри все стороны, возможные сценарии развития, "
+        "судебную практику. Дай пошаговый план действий с оценкой рисков каждого варианта."
+    ),
+    'Стратегическое консультирование': (
+        "Услуга: Стратегическое консультирование.\n"
+        "Задача: разработай правовую стратегию. Учти бизнес-контекст, долгосрочные риски, "
+        "налоговые последствия, регуляторные требования. Предложи несколько стратегий с pros/cons."
+    ),
+    'Типовой документ': (
+        "Услуга: Подготовка типового документа.\n"
+        "Задача: составь юридический документ по запросу (договор, заявление, претензия, доверенность и т.д.). "
+        "Используй актуальные шаблоны, соответствующие законодательству РФ. Все поля должны быть заполнены или отмечены как [заполнить]."
+    ),
+    'Нестандартный документ': (
+        "Услуга: Подготовка нестандартного документа.\n"
+        "Задача: составь документ по индивидуальным требованиям. Учти специфику ситуации, "
+        "нестандартные условия. Объясни логику каждого пункта."
+    ),
+    'Пакет юридических документов': (
+        "Услуга: Подготовка пакета юридических документов.\n"
+        "Задача: подготовь комплект взаимосвязанных документов. Обеспечь согласованность между документами, "
+        "единую терминологию, перекрёстные ссылки."
+    ),
+    'Полный комплект под проект': (
+        "Услуга: Полный комплект документов под проект.\n"
+        "Задача: разработай полный пакет документации для проекта. Учти все этапы, стороны, "
+        "регуляторные требования. Включи чек-лист для проверки комплектности."
+    ),
+}
 
 
-def _analyze_document(text, fname):
-    doc_type = _detect_doc_type(text)
-    pages, lines, chars = _count_pages(text)
-    sections = _extract_key_sections(text)
-    numbers = _extract_numbers(text)
-    parties = _extract_parties(text)
+def _build_system_prompt(service, files, paid):
+    base = (
+        "Ты — ЮрБот, профессиональный финансово-юридический помощник. "
+        "Ты работаешь как настоящий юрист и бухгалтер. "
+        "Отвечай на русском языке, структурированно, используй списки и выделение.\n\n"
+        "ВАЖНЫЕ ПРАВИЛА ПОВЕДЕНИЯ:\n"
+        "1. Всегда сначала уточни у пользователя, что именно ему нужно сделать, если это неясно из контекста.\n"
+        "2. Задавай уточняющие вопросы: какой результат нужен, какие сроки, есть ли особые требования.\n"
+        "3. Если загружен документ — кратко опиши его (тип, стороны, объём), затем спроси, что именно нужно с ним сделать.\n"
+        "4. НЕ выполняй полную работу без оплаты — если paid=false, дай только краткий обзор и предложи оплатить.\n"
+        "5. Если paid=true — выполняй работу ПОЛНОСТЬЮ, как профессиональный юрист/бухгалтер.\n"
+        "6. Ссылайся на конкретные статьи законов РФ (ГК, ТК, НК, ЗоЗПП и т.д.).\n"
+        "7. При составлении документов — пиши полный текст документа, готовый к использованию.\n"
+        "8. При анализе — давай постатейное заключение с рисками и рекомендациями.\n"
+    )
 
-    return {
-        'type': doc_type,
-        'filename': fname,
-        'pages': pages,
-        'lines': lines,
-        'chars': chars,
-        'sections': sections,
-        'numbers': numbers,
-        'parties': parties,
-    }
-
-
-def _format_analysis(analysis, service, paid):
-    a = analysis
+    service_block = SERVICE_PROMPTS.get(service, '')
     price = SERVICE_PRICES.get(service, 1000)
 
-    parts = []
-    parts.append(f"📄 **Документ:** {a['filename']}")
-    parts.append(f"📋 **Тип:** {a['type'].capitalize()}")
-    parts.append(f"📐 **Объём:** ~{a['pages']} стр. ({a['chars']:,} символов, {a['lines']} строк)")
+    if service_block:
+        base += f"\n{service_block}\n"
+    elif service:
+        base += f"\nПользователь выбрал услугу: {service}.\n"
 
-    if a['parties']:
-        parts.append(f"👥 **Стороны:** {', '.join(a['parties'])}")
-
-    if a['sections']:
-        parts.append("\n**Основные разделы:**")
-        for i, s in enumerate(a['sections'][:10], 1):
-            parts.append(f"  {i}. {s}")
-
-    if a['numbers']:
-        formatted = [f"{n:,.0f} руб." if n >= 1 else str(n) for n in a['numbers'][:5]]
-        parts.append(f"\n💰 **Суммы в документе:** {', '.join(formatted)}")
-
-    if not paid:
-        parts.append(f"\n---\n✅ Документ загружен и распознан. Для выполнения услуги \"{service}\" необходимо оплатить.\n\n**Стоимость: {price} ₽**")
-    else:
-        parts.append(f"\n---\n✅ Услуга \"{service}\" оплачена. Выполняю полный анализ.")
-        parts.append(_generate_full_analysis(a, service))
-
-    return '\n'.join(parts)
-
-
-def _generate_full_analysis(a, service):
-    parts = []
-
-    if 'договор' in a['type'] or 'аренда' in a['type'] or 'купля' in a['type'] or 'трудовой' in a['type']:
-        parts.append("\n\n**📌 Заключение по договору:**")
-        parts.append(f"Тип документа: {a['type'].capitalize()}")
-        if a['parties']:
-            parts.append(f"Стороны: {', '.join(a['parties'])}")
-        if a['sections']:
-            parts.append(f"Структура включает {len(a['sections'])} разделов")
-        parts.append("\n**Рекомендации:**")
-        parts.append("• Проверьте корректность реквизитов сторон")
-        parts.append("• Обратите внимание на сроки исполнения обязательств")
-        parts.append("• Проверьте условия расторжения и ответственность сторон")
-        if a['numbers']:
-            parts.append("• Сверьте финансовые суммы в тексте и приложениях")
-
-    elif 'финансов' in a['type'] or 'отчёт' in a['type'] or 'страхов' in a['type']:
-        parts.append("\n\n**📊 Финансовый анализ:**")
-        parts.append(f"Тип: {a['type'].capitalize()}")
-        if a['numbers']:
-            parts.append(f"Обнаружены финансовые показатели: {len(a['numbers'])} значений")
-            total = sum(a['numbers'])
-            parts.append(f"Общая сумма выявленных показателей: {total:,.0f} руб.")
-        if a['sections']:
-            parts.append(f"\nРазделы документа ({len(a['sections'])}):")
-            for s in a['sections']:
-                parts.append(f"  — {s}")
-
-    elif 'практическ' in a['type']:
-        parts.append("\n\n**📝 Анализ задания:**")
-        parts.append(f"Тип: Практическая / расчётная работа")
-        parts.append(f"Объём: ~{a['pages']} стр.")
-        if a['sections']:
-            parts.append("Задания/разделы:")
-            for s in a['sections']:
-                parts.append(f"  — {s}")
-        if a['numbers']:
-            parts.append(f"\nЧисловые данные: {', '.join(f'{n:,.0f}' for n in a['numbers'][:5])}")
-
-    else:
-        parts.append(f"\n\n**📝 Анализ документа ({a['type']}):**")
-        if a['sections']:
-            parts.append("Структура:")
-            for s in a['sections']:
-                parts.append(f"  — {s}")
-        if a['numbers']:
-            parts.append(f"Суммы: {', '.join(f'{n:,.0f} руб.' for n in a['numbers'][:5])}")
-
-    parts.append("\n\n*Данный анализ выполнен автоматически на основе содержимого документа.*")
-    return '\n'.join(parts)
-
-
-def _handle_chat_without_files(messages, service):
-    last = messages[-1].get('content', '').strip().lower() if messages else ''
-
-    if not last:
-        return "Здравствуйте! Опишите вашу задачу или загрузите документ для анализа."
-
-    price = SERVICE_PRICES.get(service, 0)
-    if service:
-        return (
-            f"Вы выбрали услугу: \"{service}\". "
-            f"Пожалуйста, загрузите документы для анализа или опишите вашу задачу."
+    if files and not paid:
+        base += (
+            f"\nПользователь загрузил файлы, но НЕ оплатил услугу.\n"
+            f"Проведи КРАТКИЙ предварительный обзор: тип документа, стороны, объём, ключевые разделы.\n"
+            f"Спроси пользователя, что именно нужно сделать с этим документом.\n"
+            f"В конце обязательно укажи стоимость: «Стоимость услуги: {price} ₽»\n"
+        )
+    elif files and paid:
+        base += (
+            "\nПользователь загрузил файлы и ОПЛАТИЛ услугу.\n"
+            "Выполни работу ПОЛНОСТЬЮ, как настоящий профессионал:\n"
+            "- Для анализа: постатейное заключение, риски, ссылки на законы, рекомендации.\n"
+            "- Для документов: полный текст документа, готовый к использованию.\n"
+            "- Для консультаций: развёрнутый ответ со ссылками на нормативные акты.\n"
+            "- Для расчётов: пошаговое решение с формулами и выводами.\n"
+            "Будь максимально детален и полезен.\n"
+        )
+    elif not files and not paid:
+        base += (
+            "\nФайлы не загружены. Веди диалог с пользователем:\n"
+            "- Уточни, что именно нужно сделать.\n"
+            "- Предложи загрузить документы, если это необходимо для услуги.\n"
+            "- Дай краткую консультацию по вопросу.\n"
+            f"- Если нужна платная услуга, укажи стоимость: {price} ₽\n"
         )
 
-    return (
-        "Здравствуйте! Я — ЮрБот, финансово-юридический помощник. "
-        "Выберите услугу на странице «Услуги» и загрузите документы для анализа. "
-        "Я помогу с проверкой договоров, консультациями и подготовкой документов."
-    )
+    return base
+
+
+DDG_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    'Accept': '*/*',
+    'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+    'Referer': 'https://duckduckgo.com/',
+    'Origin': 'https://duckduckgo.com',
+    'Sec-Fetch-Dest': 'empty',
+    'Sec-Fetch-Mode': 'cors',
+    'Sec-Fetch-Site': 'same-origin',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+}
+
+
+def _get_ddg_vqd():
+    headers = dict(DDG_HEADERS)
+    headers['x-vqd-accept'] = '1'
+    req = urllib.request.Request('https://duckduckgo.com/duckchat/v1/status', headers=headers)
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        vqd = resp.headers.get('x-vqd-4', '')
+    print(f'DDG VQD token: {vqd[:20]}...' if vqd else 'DDG VQD: empty!')
+    return vqd
+
+
+def _call_ddg_chat(system_prompt, messages, model='gpt-4o-mini'):
+    vqd = _get_ddg_vqd()
+    if not vqd:
+        print('DDG: no VQD token')
+        return None
+
+    ddg_messages = []
+    sys_content = system_prompt.strip()
+    if len(sys_content) > 8000:
+        sys_content = sys_content[:8000]
+
+    ddg_messages.append({"role": "user", "content": sys_content})
+    ddg_messages.append({"role": "assistant", "content": "Понял, я готов работать. Чем могу помочь?"})
+
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        if role == "assistant":
+            ddg_messages.append({"role": "assistant", "content": content})
+        else:
+            ddg_messages.append({"role": "user", "content": content})
+
+    payload = json.dumps({"model": model, "messages": ddg_messages}).encode('utf-8')
+
+    headers = dict(DDG_HEADERS)
+    headers['Content-Type'] = 'application/json'
+    headers['Accept'] = 'text/event-stream'
+    headers['x-vqd-4'] = vqd
+
+    req = urllib.request.Request('https://duckduckgo.com/duckchat/v1/chat', data=payload, headers=headers)
+
+    with urllib.request.urlopen(req, timeout=55) as resp:
+        raw = resp.read().decode('utf-8')
+
+    result_parts = []
+    for line in raw.split('\n'):
+        if not line.startswith('data: '):
+            continue
+        data_str = line[6:].strip()
+        if data_str == '[DONE]':
+            break
+        try:
+            obj = json.loads(data_str)
+            chunk = obj.get('message', '')
+            if chunk:
+                result_parts.append(chunk)
+        except (json.JSONDecodeError, KeyError):
+            continue
+
+    result = ''.join(result_parts).strip()
+    print(f'DDG {model}: got {len(result)} chars')
+    return result if result else None
+
+
+def _call_gemini_free(system_prompt, messages):
+    api_key = os.environ.get('GEMINI_API_KEY', '')
+    if not api_key:
+        return None
+
+    contents = []
+    for msg in messages:
+        role = msg.get("role", "user")
+        if role == "assistant":
+            role = "model"
+        contents.append({"role": role, "parts": [{"text": msg.get("content", "")}]})
+
+    payload = json.dumps({
+        "contents": contents,
+        "systemInstruction": {"parts": [{"text": system_prompt}]},
+        "generationConfig": {"maxOutputTokens": 4096, "temperature": 0.7},
+    }).encode('utf-8')
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key={api_key}"
+    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+
+    with urllib.request.urlopen(req, timeout=55) as resp:
+        data = json.loads(resp.read().decode('utf-8'))
+
+    candidates = data.get('candidates', [])
+    if not candidates:
+        return None
+    parts = candidates[0].get('content', {}).get('parts', [])
+    reply = ''.join(p.get('text', '') for p in parts)
+    return reply.strip() if reply else None
+
+
+def _call_ai(system_prompt, messages):
+    ddg_models = ['gpt-4o-mini', 'claude-3-haiku-20240307', 'mistralai/Mistral-Small-24B-Instruct-2501']
+
+    for model in ddg_models:
+        try:
+            result = _call_ddg_chat(system_prompt, messages, model)
+            if result:
+                print(f'AI response from DuckDuckGo ({model})')
+                return result, None
+        except Exception as e:
+            print(f'DDG {model} error: {type(e).__name__}: {str(e)[:200]}')
+
+    try:
+        result = _call_gemini_free(system_prompt, messages)
+        if result:
+            print('AI response from Gemini')
+            return result, None
+    except Exception as e:
+        print(f'Gemini error: {type(e).__name__}: {str(e)[:200]}')
+
+    return None, 'AI временно недоступен. Попробуйте через минуту.'
 
 
 def handle_chat(body):
-    """Чат с ЮрБот — мгновенный анализ документов и расчёт стоимости"""
+    """Чат с ЮрБот — полноценный юридический и финансовый помощник"""
     messages = body.get('messages', [])
     service = body.get('service', '')
     files = body.get('files', [])
@@ -642,33 +693,37 @@ def handle_chat(body):
     if not messages:
         return err(400, 'No messages')
 
-    if not files:
-        reply = _handle_chat_without_files(messages, service)
-        return ok({'reply': reply})
+    if files and messages:
+        last_msg = messages[-1]
+        file_block = ""
+        for f in files:
+            fname = f.get('name', 'file')
+            fcontent = f.get('content', '')
+            encoding = f.get('encoding', '')
 
-    all_analyses = []
-    for f in files:
-        fname = f.get('name', 'file')
-        fcontent = f.get('content', '')
-        encoding = f.get('encoding', '')
+            if encoding == 'base64':
+                fcontent = _extract_text_from_binary(fname, fcontent)
 
-        if encoding == 'base64':
-            fcontent = _extract_text_from_binary(fname, fcontent)
+            if len(fcontent) > 30000:
+                fcontent = fcontent[:30000] + '\n... (текст обрезан)'
+            file_block += f'[Содержимое файла "{fname}":]\n{fcontent}\n\n'
 
-        if len(fcontent) > 50000:
-            fcontent = fcontent[:50000]
+        user_text = last_msg.get('content', '')
+        combined = file_block + f"[Пользователь:]\n{user_text}"
 
-        analysis = _analyze_document(fcontent, fname)
-        all_analyses.append(analysis)
+        messages = list(messages)
+        messages[-1] = dict(messages[-1])
+        messages[-1]['content'] = combined
 
-    if len(all_analyses) == 1:
-        reply = _format_analysis(all_analyses[0], service, paid)
-    else:
-        parts = []
-        for i, a in enumerate(all_analyses, 1):
-            parts.append(f"### Файл {i}")
-            parts.append(_format_analysis(a, service, paid))
-        reply = '\n\n'.join(parts)
+    system_prompt = _build_system_prompt(service, files, paid)
+
+    chat_messages = []
+    for msg in messages[-10:]:
+        chat_messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
+
+    reply, error = _call_ai(system_prompt, chat_messages)
+    if error:
+        return err(502, error)
 
     return ok({'reply': reply})
 

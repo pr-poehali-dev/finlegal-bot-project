@@ -481,6 +481,8 @@ def handle_chat(body):
         except Exception:
             pass
         print(f'AI HTTPError {e.code}: {error_body[:500]}')
+        if e.code == 401:
+            return err(502, 'Ключ AI-сервиса недействителен. Обратитесь к администратору.')
         return err(502, f'AI временно недоступен (код {e.code}). Попробуйте через минуту.')
     except urllib.error.URLError as e:
         print(f'AI URLError: {e.reason}')
